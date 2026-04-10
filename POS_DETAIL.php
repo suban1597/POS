@@ -141,7 +141,8 @@ function parse_date(string $s): ?DateTime {
 // ---------------------------
 // INPUT
 // ---------------------------
-$search_mode   = ($_GET['mode'] ?? '') === 'history' ? 'history' : 'detail';
+$_raw_mode   = $_GET['mode'] ?? '';
+$search_mode = in_array($_raw_mode, ['history','report']) ? $_raw_mode : 'detail';
 $_yesterday    = date('d/m/Y', strtotime('-1 day'));
 $start_date    = trim($_GET['start'] ?? ($search_mode === 'history' ? $_yesterday : date('d/m/Y')));
 $end_date      = trim($_GET['end']   ?? ($search_mode === 'history' ? $_yesterday : date('d/m/Y')));
@@ -878,7 +879,275 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && isset($_GET['stat']) && $_G
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
-if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && empty($errors)) {
+if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && $search_mode === 'report' && empty($errors)) {
+    header('Content-Type: application/json; charset=utf-8');
+    $instant_client_path = rtrim($instant_client_path, '/');
+    $sqlplus_path = "{$instant_client_path}/sqlplus";
+    if (!is_executable($sqlplus_path)) {
+        echo json_encode(['error' => "SQL*Plus Not Found: {$sqlplus_path}"]);
+        exit;
+    }
+    $cashier_map = load_cashier_map($sqlplus_path, $oracle_user, $oracle_pass, $oracle_tns, $instant_client_path);
+    $esc_slip    = str_replace("'", "''", strtoupper($slip_search));
+    $esc_branch  = str_replace("'", "''", $branch_filter);
+    $allowed_branches = function_exists('pos_get_branches') ? pos_get_branches() : null;
+    if ($allowed_branches === null) {
+        $plsql_branch_access = 'TRUE';
+    } elseif (empty($allowed_branches)) {
+        $plsql_branch_access = 'FALSE';
+    } else {
+        $parts = array_map(fn($b) => "NVL(v_sc2,v_branch)='" . str_replace("'","''",$b) . "'", $allowed_branches);
+        $plsql_branch_access = '(' . implode(' OR ', $parts) . ')';
+    }
+    $sql_report = <<<SQL
+SET ECHO OFF
+SET FEEDBACK OFF
+SET HEADING OFF
+SET VERIFY OFF
+SET LINESIZE 500
+SET PAGESIZE 0
+SET TRIMSPOOL ON
+SET SERVEROUTPUT ON SIZE UNLIMITED
+ALTER SESSION SET NLS_TERRITORY = America;
+ALTER SESSION SET NLS_LANGUAGE = American;
+VARIABLE start_date VARCHAR2(10);
+VARIABLE end_date   VARCHAR2(10);
+EXEC :start_date := '$start_date';
+EXEC :end_date   := '$end_date';
+DECLARE
+    v_start DATE;
+    v_end   DATE;
+    v_slip_filter   VARCHAR2(100) := UPPER('$esc_slip');
+    v_branch_filter VARCHAR2(100) := TRIM('$esc_branch');
+
+    TYPE t_str_tab  IS TABLE OF VARCHAR2(200);
+    TYPE t_num_tab  IS TABLE OF NUMBER;
+    TYPE t_date_tab IS TABLE OF DATE;
+
+    v_mnos   t_str_tab;
+    v_cids   t_str_tab;
+    v_slips  t_str_tab;
+    v_mamts  t_num_tab;
+    v_mdates t_date_tab;
+    v_mids   t_str_tab;
+
+    v_total_slip NUMBER := 0;
+    v_total_amt  NUMBER := 0;
+    v_total_item NUMBER := 0;
+
+    TYPE t_dedup_tab IS TABLE OF VARCHAR2(1) INDEX BY VARCHAR2(100);
+    v_bc_dedup t_dedup_tab;
+
+    CURSOR c_tables IS
+        SELECT table_name
+        FROM all_tables
+        WHERE owner = 'POS'
+          AND table_name LIKE 'POS_SALETODAY_HD_%'
+          AND REPLACE(table_name,'POS_SALETODAY_HD_','') NOT IN ('_TMP','TEST99')
+        ORDER BY table_name;
+
+    v_branch   VARCHAR2(100);
+    v_dt_table VARCHAR2(100);
+    v_sc2      VARCHAR2(20);
+    v_oname2   VARCHAR2(100);
+BEGIN
+    v_start := TO_DATE(:start_date,'DD/MM/YYYY');
+    v_end   := TO_DATE(:end_date,'DD/MM/YYYY') + 1 - 1/86400;
+
+    FOR rec IN c_tables LOOP
+        v_branch   := REPLACE(rec.table_name,'POS_SALETODAY_HD_','');
+        v_dt_table := REPLACE(rec.table_name,'HD','DT');
+        v_sc2      := v_branch;
+        v_oname2   := v_branch;
+
+        BEGIN
+            EXECUTE IMMEDIATE
+                'SELECT TRIM(SALE_OFFICE) FROM POS.'||rec.table_name||
+                ' WHERE SALE_OFFICE IS NOT NULL AND ROWNUM=1'
+            INTO v_sc2;
+            SELECT NVL(TRIM(OFFICE_NAME),v_branch) INTO v_oname2
+            FROM POS.POS_SALE_OFFICE
+            WHERE TRIM(SALE_OFFICE)=v_sc2 AND ROWNUM=1;
+        EXCEPTION WHEN OTHERS THEN v_sc2:=v_branch; v_oname2:=v_branch; END;
+
+        IF (v_branch_filter IS NULL OR v_branch_filter=''
+            OR TRIM(v_sc2)=v_branch_filter OR v_branch=v_branch_filter)
+           AND ({$plsql_branch_access}) THEN
+        BEGIN
+            IF v_slip_filter IS NOT NULL AND LENGTH(TRIM(v_slip_filter))>0 THEN
+                EXECUTE IMMEDIATE
+                    'SELECT MACHINE_NO,CASHIER_ID,SLIP_NO,GRAND_AMOUNT,CREATE_DATE,MEMBER_ID'||
+                    ' FROM POS.'||rec.table_name||
+                    ' WHERE CREATE_DATE>=:1 AND CREATE_DATE<:2'||
+                    ' AND UPPER(SLIP_NO) LIKE ''%''||:3||''%'''||
+                    ' ORDER BY CREATE_DATE DESC'
+                BULK COLLECT INTO v_mnos,v_cids,v_slips,v_mamts,v_mdates,v_mids
+                USING v_start,v_end,v_slip_filter;
+            ELSE
+                EXECUTE IMMEDIATE
+                    'SELECT MACHINE_NO,CASHIER_ID,SLIP_NO,GRAND_AMOUNT,CREATE_DATE,MEMBER_ID'||
+                    ' FROM POS.'||rec.table_name||
+                    ' WHERE CREATE_DATE>=:1 AND CREATE_DATE<:2'||
+                    ' ORDER BY CREATE_DATE DESC'
+                BULK COLLECT INTO v_mnos,v_cids,v_slips,v_mamts,v_mdates,v_mids
+                USING v_start,v_end;
+            END IF;
+
+            FOR k IN 1..v_mnos.COUNT LOOP
+                DECLARE
+                    v_mdesc VARCHAR2(100) := TRIM(v_mnos(k));
+                    v_icnt  NUMBER := 0;
+                BEGIN
+                    BEGIN
+                        EXECUTE IMMEDIATE
+                            'SELECT MIN(TRIM(MACHINE_DESC)) FROM POS.POS_MACHINE'||
+                            ' WHERE TRIM(SALE_OFFICE)=:1 AND TRIM(MACHINE_NO)=:2'
+                        INTO v_mdesc USING v_branch,TRIM(v_mnos(k));
+                        IF v_mdesc IS NULL THEN v_mdesc:=TRIM(v_mnos(k)); END IF;
+                    EXCEPTION WHEN OTHERS THEN v_mdesc:=TRIM(v_mnos(k)); END;
+                    BEGIN
+                        EXECUTE IMMEDIATE
+                            'SELECT NVL(SUM(net_qty),0) FROM ('||
+                            '  SELECT dt.BARCODE, SUM(dt.QTY) AS net_qty FROM POS.'||v_dt_table||' dt'||
+                            '  WHERE dt.SLIP_NO=:1 AND dt.BARCODE IS NOT NULL AND dt.QTY<>0'||
+                            '  GROUP BY dt.BARCODE HAVING SUM(dt.QTY)>0'||
+                            ')'
+                        INTO v_icnt USING v_slips(k);
+                    EXCEPTION WHEN OTHERS THEN v_icnt:=0; END;
+
+                    DBMS_OUTPUT.PUT_LINE(
+                        'RPT|'||TRIM(v_sc2)||'|'||v_oname2||'|'||TRIM(v_mnos(k))||'|'||v_mdesc||'|'||
+                        NVL(v_cids(k),'-')||'|'||NVL(v_slips(k),'-')||'|'||
+                        TO_CHAR(NVL(v_mamts(k),0),'FM999999999990.00')||'|'||
+                        NVL(TO_CHAR(v_mdates(k),'DD/MM/YYYY HH24:MI:SS'),'-')||'|'||
+                        TO_CHAR(NVL(v_icnt,0))||'|'||NVL(v_mids(k),'-')
+                    );
+                    v_total_slip := v_total_slip + 1;
+                    v_total_amt  := v_total_amt  + NVL(v_mamts(k),0);
+                    v_total_item := v_total_item + NVL(v_icnt,0);
+                END;
+            END LOOP;
+            -- นับ unique barcode สำหรับ total_line
+            DECLARE
+                v_bcs_d t_str_tab;
+            BEGIN
+                IF v_slip_filter IS NOT NULL AND LENGTH(TRIM(v_slip_filter)) > 0 THEN
+                    EXECUTE IMMEDIATE
+                        'SELECT dt.BARCODE FROM POS.'||v_dt_table||' dt'||
+                        ' JOIN POS.'||rec.table_name||' h ON h.SLIP_NO=dt.SLIP_NO'||
+                        ' WHERE h.CREATE_DATE>=:1 AND h.CREATE_DATE<:2'||
+                        ' AND UPPER(h.SLIP_NO) LIKE ''%''||:3||''%'''||
+                        ' AND dt.BARCODE IS NOT NULL AND dt.QTY<>0'||
+                        ' GROUP BY dt.BARCODE HAVING SUM(dt.QTY)>0'
+                    BULK COLLECT INTO v_bcs_d USING v_start, v_end, v_slip_filter;
+                ELSE
+                    EXECUTE IMMEDIATE
+                        'SELECT dt.BARCODE FROM POS.'||v_dt_table||' dt'||
+                        ' JOIN POS.'||rec.table_name||' h ON h.SLIP_NO=dt.SLIP_NO'||
+                        ' WHERE h.CREATE_DATE>=:1 AND h.CREATE_DATE<:2'||
+                        ' AND dt.BARCODE IS NOT NULL AND dt.QTY<>0'||
+                        ' GROUP BY dt.BARCODE HAVING SUM(dt.QTY)>0'
+                    BULK COLLECT INTO v_bcs_d USING v_start, v_end;
+                END IF;
+                FOR i IN 1..v_bcs_d.COUNT LOOP
+                    v_bc_dedup(TRIM(v_bcs_d(i))) := '1';
+                END LOOP;
+            EXCEPTION WHEN OTHERS THEN NULL;
+            END;
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END;
+        END IF;
+    END LOOP;
+
+    DBMS_OUTPUT.PUT_LINE('RPTTOTAL|'||TO_CHAR(v_total_slip)||'|'||TO_CHAR(v_total_item)||'|'||
+        TO_CHAR(v_total_amt,'FM999999999990.00')||'|'||TO_CHAR(v_bc_dedup.COUNT));
+EXCEPTION WHEN OTHERS THEN
+    DBMS_OUTPUT.PUT_LINE('FATAL|'||SQLERRM);
+END;
+/
+EXIT;
+SQL;
+    $rpt_file = sys_get_temp_dir() . "/POS_RPT_" . uniqid() . ".sql";
+    file_put_contents($rpt_file, $sql_report);
+    $user_pass = escapeshellarg("{$oracle_user}/{$oracle_pass}@{$oracle_tns}");
+    $cmd = "env -i LD_LIBRARY_PATH={$instant_client_path} TNS_ADMIN={$instant_client_path} NLS_LANG=THAI_THAILAND.AL32UTF8 {$sqlplus_path} -s $user_pass @$rpt_file 2>&1";
+    $rpt_output = (string)shell_exec($cmd);
+    @unlink($rpt_file);
+
+    foreach (explode("\n", $rpt_output) as $_ln) {
+        $_ln = trim($_ln);
+        if ($_ln === '' || strpos($_ln,'|') !== false) continue;
+        if (preg_match('/^(FATAL|ORA-|SP2-)/', $_ln)) {
+            echo json_encode(['error' => $_ln, 'raw' => mb_substr($rpt_output,0,500)]);
+            exit;
+        }
+    }
+
+    $rpt_rows = [];
+    $rpt_total_slip = $rpt_total_item = 0;
+    $rpt_total_amt  = 0.0;
+    $rpt_total_line = 0;
+
+    foreach (explode("\n", $rpt_output) as $raw) {
+        $line = trim($raw);
+        if ($line === '') continue;
+        if (strpos($line,'RPTTOTAL|') === 0) {
+            $p = explode('|', $line, 5);
+            $rpt_total_slip = (int)($p[1] ?? 0);
+            $rpt_total_item = (int)($p[2] ?? 0);
+            $rpt_total_amt  = (float)($p[3] ?? 0);
+            $rpt_total_line = (int)($p[4] ?? 0);
+            continue;
+        }
+        if (strpos($line,'RPT|') !== 0) continue;
+        // RPT|sale_office|office_name|machine_no|machine_desc|cashier|slip_no|amount|datetime|item_cnt|member_id
+        $p = explode('|', $line, 11);
+        if (count($p) < 11) continue;
+        $cashier_id = trim($p[5]);
+        $rpt_rows[] = [
+            'sale_office'  => trim($p[1]),
+            'office_name'  => trim($p[2]),
+            'machine_no'   => trim($p[3]),
+            'machine_desc' => trim($p[4]),
+            'cashier'      => $cashier_id,
+            'cashier_name' => $cashier_map[$cashier_id] ?? '',
+            'slip'         => trim($p[6]),
+            'amount'       => (float)$p[7],
+            'date'         => trim($p[8]),
+            'item'         => (int)$p[9],
+            'member_id'    => trim($p[10]) === '-' ? '' : trim($p[10]),
+        ];
+    }
+
+    // sort: date DESC
+    usort($rpt_rows, function($a,$b) {
+        $af = DateTime::createFromFormat('d/m/Y H:i:s', $a['date'], new DateTimeZone('Asia/Bangkok'));
+        $bf = DateTime::createFromFormat('d/m/Y H:i:s', $b['date'], new DateTimeZone('Asia/Bangkok'));
+        return ($bf ? $bf->getTimestamp() : 0) <=> ($af ? $af->getTimestamp() : 0);
+    });
+
+    // apply limit (ตัดจำนวนรายการที่แสดงผล)
+    $rpt_rows = array_slice($rpt_rows, 0, $limit_n);
+
+    echo json_encode([
+        'ok'           => true,
+        'refresh_time' => date('d/m/Y H:i:s'),
+        'start_date'   => $start_date,
+        'end_date'     => $end_date,
+        'slip_search'  => $slip_search,
+        'branch_filter'=> $branch_filter,
+        'total_slip'   => $rpt_total_slip ?: count($rpt_rows),
+        'total_item'   => $rpt_total_item,
+        'total_amount' => $rpt_total_amt,
+        'total_line'   => $rpt_total_line,
+        'rows'         => $rpt_rows,
+    ], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && $search_mode === 'report') { exit; } // guard
+
+if (isset($_GET['ajax']) && $_GET['ajax'] === '1' && $search_mode === 'detail' && empty($errors)) {
     header('Content-Type: application/json');
     $instant_client_path = rtrim($instant_client_path, '/');
     $sqlplus_path = "{$instant_client_path}/sqlplus";
@@ -1630,6 +1899,12 @@ tr.no-data { background-color:#330000; color:#ff8888; font-weight:bold; text-ali
                background:<?=$search_mode==='detail'?'#0ff':'rgba(0,255,255,0.08)'?>;
                color:<?=$search_mode==='detail'?'#000':'#0ff'?>;">
         <i class="fas fa-store" style="margin-right:8px;"></i>รายการขายวันนี้
+    </button><button type="button" id="tab-report" onclick="setMode('report')"
+        style="padding:10px 28px;border-radius:0;border:2px solid #a855f7;border-left:none;
+               font-size:15px;font-weight:bold;cursor:pointer;transition:all 0.2s;
+               background:<?=$search_mode==='report'?'#a855f7':'rgba(168,85,247,0.08)'?>;
+               color:<?=$search_mode==='report'?'#fff':'#a855f7'?>;">
+        <i class="fas fa-file-invoice-dollar" style="margin-right:8px;"></i>รายงานการขาย
     </button><button type="button" id="tab-history" onclick="setMode('history')"
         style="padding:10px 28px;border-radius:0 8px 8px 0;border:2px solid #ff9800;
                border-left:none;font-size:15px;font-weight:bold;cursor:pointer;transition:all 0.2s;
@@ -1730,6 +2005,103 @@ tr.no-data { background-color:#330000; color:#ff8888; font-weight:bold; text-ali
 <tbody></tbody>
 </table>
 </div><!-- /section-detail -->
+
+<!-- ═══════════════════════ SECTION REPORT ═══════════════════════ -->
+<div id="section-report" style="display:<?=$search_mode==='report'?'block':'none'?>">
+<div class="filter-section">
+<form method="GET" id="rpt-form" style="text-align:center;">
+    <input type="hidden" name="mode" value="report">
+    <div class="form-group">
+        <label>ค้นหาสลิป:</label>
+        <input type="text" name="slip" id="rpt-slip" value="<?=htmlspecialchars($slip_search??'')?>"
+               placeholder="เลขสลิป..." autocomplete="off" style="width:180px;">
+    </div>
+    <div class="form-group">
+        <label for="rpt-branch-select">สาขา:</label>
+        <select name="branch" id="rpt-branch-select" style="min-width:180px;cursor:pointer;">
+            <option value="">— ทุกสาขา —</option>
+            <?php foreach ($office_list_today as $code => $name): ?>
+            <option value="<?=htmlspecialchars($code)?>" <?=$branch_filter===$code?'selected':''?>>
+                <?=htmlspecialchars($name)?> (<?=htmlspecialchars($code)?>)
+            </option>
+            <?php endforeach; ?>
+        </select>
+    </div>
+    <div class="form-group">
+        <label>วันที่:</label>
+        <input type="text" name="start" id="rpt-start" value="<?=htmlspecialchars($start_date)?>"
+               placeholder="วว/ดด/ปปปป" autocomplete="off" required readonly style="cursor:pointer;">
+        <i class="fas fa-calendar-alt date-icon" id="rpt-start-icon"></i>
+    </div>
+    <div class="form-group">
+        <label>แสดง:</label>
+        <input type="number" name="limit_n" id="rpt-limit" min="1" max="10000"
+               value="<?= (int)$limit_n ?>"
+               style="width:80px;padding:10px 8px;border-radius:6px;border:2px solid #a855f7;background:#0a0a0a;color:#a855f7;font-size:14px;text-align:center;">
+        <span style="color:#aaa;font-size:12px;margin-left:4px;">รายการ</span>
+    </div>
+    <button type="submit"><i class="fas fa-search"></i> ค้นหา</button>
+    <button type="button" id="rpt-refresh-btn" style="display:none;"><i class="fas fa-sync"></i> รีเฟรช</button>
+</form>
+</div>
+
+<!-- การ์ดสรุป (Report) -->
+<div style="display:flex;justify-content:center;gap:20px;flex-wrap:wrap;margin:20px 0;">
+    <div style="background:linear-gradient(135deg,rgba(168,85,247,0.2),rgba(126,60,200,0.2));border:2px solid #a855f7;border-radius:14px;padding:18px 36px;text-align:center;box-shadow:0 0 24px rgba(168,85,247,0.2);min-width:200px;">
+        <div style="color:#aaa;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;"><i class="fas fa-chart-line" style="margin-right:6px;"></i>ยอดขายรวม</div>
+        <div style="font-size:36px;font-weight:bold;color:#c084fc;text-shadow:0 0 16px rgba(168,85,247,0.6);" id="rpt-total-amount">0.00</div>
+        <div style="color:#aaa;font-size:12px;margin-top:4px;">บาท</div>
+    </div>
+    <div style="background:linear-gradient(135deg,rgba(0,200,83,0.2),rgba(0,150,60,0.2));border:2px solid #00c853;border-radius:14px;padding:18px 36px;text-align:center;box-shadow:0 0 24px rgba(0,200,83,0.2);min-width:200px;">
+        <div style="color:#aaa;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;"><i class="fas fa-store" style="margin-right:6px;"></i>สาขาที่มีข้อมูล</div>
+        <div style="font-size:42px;font-weight:bold;color:#00e676;text-shadow:0 0 16px rgba(0,200,83,0.6);" id="rpt-online-count">0</div>
+        <div style="color:#aaa;font-size:12px;margin-top:4px;">สาขา</div>
+    </div>
+    <div style="background:linear-gradient(135deg,rgba(255,107,53,0.2),rgba(200,80,30,0.2));border:2px solid #ff6b35;border-radius:14px;padding:18px 36px;text-align:center;box-shadow:0 0 24px rgba(255,107,53,0.2);min-width:200px;">
+        <div style="color:#aaa;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;"><i class="fas fa-user-check" style="margin-right:6px;"></i>สมาชิก</div>
+        <div style="font-size:42px;font-weight:bold;color:#ff6b35;text-shadow:0 0 16px rgba(255,107,53,0.6);" id="rpt-total-members">0</div>
+        <div style="color:#aaa;font-size:12px;margin-top:4px;">คน</div>
+    </div>
+    <div style="background:linear-gradient(135deg,rgba(33,150,243,0.2),rgba(21,101,192,0.2));border:2px solid #42a5f5;border-radius:14px;padding:18px 36px;text-align:center;box-shadow:0 0 24px rgba(33,150,243,0.2);min-width:200px;">
+        <div style="color:#aaa;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;"><i class="fas fa-receipt" style="margin-right:6px;"></i>จำนวนสลิป</div>
+        <div style="font-size:42px;font-weight:bold;color:#42a5f5;text-shadow:0 0 16px rgba(33,150,243,0.6);" id="rpt-total-slip">0</div>
+        <div style="color:#aaa;font-size:12px;margin-top:4px;">สลิป</div>
+    </div>
+    <div style="background:linear-gradient(135deg,rgba(76,175,80,0.2),rgba(56,142,60,0.2));border:2px solid #4caf50;border-radius:14px;padding:18px 36px;text-align:center;box-shadow:0 0 24px rgba(76,175,80,0.2);min-width:200px;">
+        <div style="color:#aaa;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;"><i class="fas fa-boxes" style="margin-right:6px;"></i>จำนวนสินค้ารวม</div>
+        <div style="font-size:42px;font-weight:bold;color:#4caf50;text-shadow:0 0 16px rgba(76,175,80,0.6);" id="rpt-total-item">0</div>
+        <div style="color:#aaa;font-size:12px;margin-top:4px;">ชิ้น</div>
+    </div>
+    <div style="background:linear-gradient(135deg,rgba(255,193,7,0.2),rgba(255,160,0,0.2));border:2px solid #ffc107;border-radius:14px;padding:18px 36px;text-align:center;box-shadow:0 0 24px rgba(255,193,7,0.2);min-width:200px;">
+        <div style="color:#aaa;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;"><i class="fas fa-list-ul" style="margin-right:6px;"></i>รายการสินค้ารวม</div>
+        <div style="font-size:42px;font-weight:bold;color:#ffc107;text-shadow:0 0 16px rgba(255,193,7,0.6);" id="rpt-total-line">0</div>
+        <div style="color:#aaa;font-size:12px;margin-top:4px;">รายการ</div>
+    </div>
+</div>
+
+<div style="text-align:right;color:#aaa;font-size:12px;margin-bottom:6px;">
+    รีเฟรชล่าสุด: <span id="rpt-refresh-time">-</span>
+</div>
+<div style="overflow-x:auto;">
+<table id="rpt-table">
+<thead>
+    <tr>
+        <th style="width:50px;text-align:center;">#</th>
+        <th style="min-width:160px;">สาขา</th>
+        <th style="min-width:120px;">เครื่อง</th>
+        <th style="min-width:130px;">แคชเชียร์</th>
+        <th style="min-width:160px;">เลขสลิป</th>
+        <th style="min-width:60px;text-align:right;">ชิ้น</th>
+        <th style="min-width:120px;text-align:right;">ยอดรวม (บาท)</th>
+        <th style="min-width:170px;">วันเวลา</th>
+        <th style="min-width:120px;">สมาชิก</th>
+    </tr>
+</thead>
+<tbody id="rpt-tbody"></tbody>
+</table>
+</div>
+</div><!-- /section-report -->
+
 <div id="section-history" style="display:<?=$search_mode==='history'?'block':'none'?>">
 <!-- Filter -->
 <div class="filter-section">
@@ -1858,32 +2230,215 @@ tr.no-data { background-color:#330000; color:#ff8888; font-weight:bold; text-ali
 // ────────────────────────────────────────────
 function setMode(mode) {
     document.getElementById('mode-val').value = mode;
-    const isHist = mode === 'history';
-    document.getElementById('section-detail').style.display  = isHist ? 'none'  : 'block';
-    document.getElementById('section-history').style.display = isHist ? 'block' : 'none';
-    document.getElementById('tab-detail').style.background   = isHist ? 'rgba(0,255,255,0.08)' : '#0ff';
-    document.getElementById('tab-detail').style.color        = isHist ? '#0ff' : '#000';
-    document.getElementById('tab-history').style.background  = isHist ? '#ff9800' : 'rgba(255,152,0,0.08)';
-    document.getElementById('tab-history').style.color       = isHist ? '#000' : '#ff9800';
-    // ปรับ datepicker
+    const isHist   = mode === 'history';
+    const isReport = mode === 'report';
+    const isDetail = mode === 'detail';
+
+    document.getElementById('section-detail').style.display  = isDetail ? 'block' : 'none';
+    document.getElementById('section-report').style.display  = isReport ? 'block' : 'none';
+    document.getElementById('section-history').style.display = isHist   ? 'block' : 'none';
+
+    document.getElementById('tab-detail').style.background  = isDetail ? '#0ff'                   : 'rgba(0,255,255,0.08)';
+    document.getElementById('tab-detail').style.color       = isDetail ? '#000'                   : '#0ff';
+    document.getElementById('tab-report').style.background  = isReport ? '#a855f7'                : 'rgba(168,85,247,0.08)';
+    document.getElementById('tab-report').style.color       = isReport ? '#fff'                   : '#a855f7';
+    document.getElementById('tab-history').style.background = isHist   ? '#ff9800'                : 'rgba(255,152,0,0.08)';
+    document.getElementById('tab-history').style.color      = isHist   ? '#000'                   : '#ff9800';
+
     const now = new Date();
     const todayStr = ('0'+now.getDate()).slice(-2)+'/'+ ('0'+(now.getMonth()+1)).slice(-2)+'/'+now.getFullYear();
     const yest = new Date(now); yest.setDate(yest.getDate()-1);
     const yesterdayStr = ('0'+yest.getDate()).slice(-2)+'/'+ ('0'+(yest.getMonth()+1)).slice(-2)+'/'+yest.getFullYear();
+
     if (isHist) {
         $('#start_date,#end_date').datepicker('option', {minDate:null, maxDate:'today'});
-        // ตั้ง h-start/h-end เป็นเมื่อวาน (ถ้ายังไม่เคยกรอก)
-        if (!$('#h-start').val() || $('#h-start').val() === todayStr) {
-            $('#h-start').datepicker('setDate', yesterdayStr);
-        }
-        if (!$('#h-end').val() || $('#h-end').val() === todayStr) {
-            $('#h-end').datepicker('setDate', yesterdayStr);
-        }
+        if (!$('#h-start').val() || $('#h-start').val() === todayStr) $('#h-start').datepicker('setDate', yesterdayStr);
+        if (!$('#h-end').val()   || $('#h-end').val()   === todayStr) $('#h-end').datepicker('setDate', yesterdayStr);
+    } else if (isReport) {
+        updateReport();
     } else {
         $('#start_date,#end_date').datepicker('option', {minDate:'today', maxDate:'today'});
         $('#start_date,#end_date').val(todayStr);
         updateDashboard();
     }
+}
+
+// ─── REPORT MODE JS ─────────────────────────────────────────────────
+// เก็บ state ของแถวที่ render ไว้แล้ว (slip_no → {tr, hash})
+let _rptRowMap = new Map();
+
+function _rptHash(r) {
+    return [r.date, r.amount, r.item, r.member_id, r.cashier, r.machine_no].join('|');
+}
+function _rptDateParse(s) {
+    if (!s || s === '-') return null;
+    const p = s.match(/(\d+)\/(\d+)\/(\d+) (\d+):(\d+):(\d+)/);
+    return p ? new Date(p[3], p[2]-1, p[1], p[4], p[5], p[6]) : null;
+}
+function _rptRowCls(r) {
+    const mt = _rptDateParse(r.date);
+    if (!mt) return '';
+    const dm = Math.round((new Date() - mt) / 60000);
+    if (dm <= 10) return 'machine-delay-10';
+    if (dm <= 30) return 'machine-delay-30';
+    if (dm > 60)  return 'machine-delay-60';
+    return '';
+}
+function _rptBuildCells(r, idx) {
+    const mt = _rptDateParse(r.date);
+    const dm = mt ? Math.round((new Date() - mt) / 60000) : 999;
+    const officeDisp = (r.office_name && r.office_name !== r.sale_office)
+        ? `<span style="color:#c084fc;">${r.office_name}</span><span style="color:#aaa;font-size:12px;"> (${r.sale_office})</span>`
+        : `<span style="color:#c084fc;">${r.sale_office}</span>`;
+    const machineDisp = (r.machine_desc && r.machine_desc !== r.machine_no)
+        ? `<span style="color:#ffcc00;">${r.machine_desc}</span><span style="color:#777;font-size:11px;"> [${r.machine_no}]</span>`
+        : `<span style="color:#ffcc00;">${r.machine_no}</span>`;
+    const cashierDisp = r.cashier_name
+        ? `${r.cashier} <span style="color:#aaa;font-size:11px;">${r.cashier_name}</span>`
+        : r.cashier;
+    const memberDisp = r.member_id
+        ? `<span class="member-badge">สมาชิก ${r.member_id}</span>` : '-';
+    const dateDisp = r.date && r.date !== '-'
+        ? `${r.date} <span style="color:#777;font-size:11px;">(${dm} นาที)</span>` : '-';
+    return `
+        <td style="text-align:center;color:#888;font-size:12px;font-weight:bold;">${idx}</td>
+        <td>${officeDisp}</td>
+        <td>${machineDisp}</td>
+        <td style="font-size:13px;">${cashierDisp}</td>
+        <td style="font-family:monospace;font-size:12px;color:#0ff;">${r.slip}</td>
+        <td align="right" style="color:${r.item>0?'#0f0':'#555'};">${r.item>0?r.item.toLocaleString():'-'}</td>
+        <td align="right" style="color:#fff;font-weight:bold;">${Number(r.amount).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+        <td style="font-size:12px;">${dateDisp}</td>
+        <td>${memberDisp}</td>`;
+}
+
+function updateReport() {
+    const p = new URLSearchParams();
+    p.set('ajax','1');
+    p.set('mode','report');
+    const startEl  = document.getElementById('rpt-start');
+    const branchEl = document.getElementById('rpt-branch-select');
+    const slipEl   = document.getElementById('rpt-slip');
+    const limitEl  = document.getElementById('rpt-limit');
+    if (startEl)  p.set('start',   startEl.value);
+    p.set('end',   startEl ? startEl.value : '');
+    if (branchEl) p.set('branch',  branchEl.value);
+    if (slipEl)   p.set('slip',    slipEl.value);
+    if (limitEl)  p.set('limit_n', limitEl.value || '100');
+
+    fetch('?' + p.toString())
+    .then(r => { if (!r.ok) throw new Error('Network error ' + r.status); return r.json(); })
+    .then(d => {
+        const tbody = document.getElementById('rpt-tbody');
+
+        if (d.error) {
+            tbody.innerHTML = `<tr><td colspan="9" class="error"><h2>Oracle Error</h2>${d.error}</td></tr>`;
+            _rptRowMap.clear();
+            return;
+        }
+
+        // ── อัพเดตการ์ดโดยไม่ยุ่งกับตาราง ──────────────────────────────
+        const rtEl = document.getElementById('rpt-refresh-time');
+        if (rtEl) rtEl.innerText = d.refresh_time;
+
+        document.getElementById('rpt-total-slip').innerText   = Number(d.total_slip||0).toLocaleString();
+        document.getElementById('rpt-total-item').innerText   = Number(d.total_item||0).toLocaleString();
+        document.getElementById('rpt-total-amount').innerText = Number(d.total_amount||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+
+        if (d.rows && d.rows.length > 0) {
+            const uniqueOffices = new Set(d.rows.map(r => r.sale_office));
+            const uniqueMembers = new Set(d.rows.filter(r => r.member_id && r.member_id !== '-' && r.member_id !== '').map(r => r.member_id));
+            if (document.getElementById('rpt-online-count'))  document.getElementById('rpt-online-count').innerText  = uniqueOffices.size.toLocaleString();
+            if (document.getElementById('rpt-total-members')) document.getElementById('rpt-total-members').innerText = uniqueMembers.size.toLocaleString();
+            // ใช้ total_line จาก PHP (unique barcode count) เหมือน detail mode
+            if (document.getElementById('rpt-total-line'))    document.getElementById('rpt-total-line').innerText    = Number(d.total_line||0).toLocaleString();
+        } else {
+            if (document.getElementById('rpt-online-count'))  document.getElementById('rpt-online-count').innerText  = '0';
+            if (document.getElementById('rpt-total-members')) document.getElementById('rpt-total-members').innerText = '0';
+            if (document.getElementById('rpt-total-line'))    document.getElementById('rpt-total-line').innerText    = '0';
+        }
+
+        // ── กรณีไม่มีข้อมูล ─────────────────────────────────────────────
+        if (!d.rows || d.rows.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:80px 20px;
+                background:rgba(139,0,0,0.2);border:2px dashed #ff6b6b;color:#ff6b6b;font-size:28px;font-weight:bold;">
+                <i class="fas fa-ban" style="margin-right:16px;font-size:36px;"></i>ไม่มีข้อมูลในช่วงที่ระบุ</td></tr>`;
+            _rptRowMap.clear();
+            return;
+        }
+
+        // ── DOM DIFF — ไม่ล้างตาราง ไม่พริบ ───────────────────────────
+        // 1. หา slip set ใหม่
+        const newSlipSet = new Set(d.rows.map(r => r.slip));
+
+        // 2. ลบแถวที่ไม่มีใน data ใหม่
+        for (const [slip, entry] of _rptRowMap) {
+            if (!newSlipSet.has(slip)) {
+                entry.tr.remove();
+                _rptRowMap.delete(slip);
+            }
+        }
+
+        // 3. ลบ summary row เดิม (ถ้ามี)
+        const oldSummary = tbody.querySelector('.summary-row');
+        if (oldSummary) oldSummary.remove();
+
+        // 4. วางแถวตามลำดับใหม่ (insert/update)
+        let prevTr = null;
+        let totalSlip = 0, totalItem = 0, totalAmt = 0;
+
+        d.rows.forEach((r, i) => {
+            totalSlip++; totalItem += r.item || 0; totalAmt += Number(r.amount);
+            const hash = _rptHash(r);
+            const cls  = _rptRowCls(r);
+
+            if (_rptRowMap.has(r.slip)) {
+                // แถวมีอยู่แล้ว — อัพเดตเฉพาะที่เปลี่ยน
+                const entry = _rptRowMap.get(r.slip);
+                const tr = entry.tr;
+
+                // อัพเดต index เสมอ
+                if (tr.cells[0]) tr.cells[0].textContent = i + 1;
+
+                // อัพเดต class (สีตาม delay)
+                if (tr.className !== cls) tr.className = cls;
+
+                // อัพเดต cells เฉพาะตอน data เปลี่ยน
+                if (entry.hash !== hash) {
+                    tr.innerHTML = _rptBuildCells(r, i + 1);
+                    entry.hash = hash;
+                }
+
+                // จัดลำดับแถวให้ถูก position
+                const refNode = prevTr ? prevTr.nextSibling : tbody.firstChild;
+                if (tr !== refNode) tbody.insertBefore(tr, refNode || null);
+                prevTr = tr;
+            } else {
+                // แถวใหม่ — สร้างและ insert
+                const tr = document.createElement('tr');
+                tr.className = cls;
+                tr.innerHTML = _rptBuildCells(r, i + 1);
+                const refNode = prevTr ? prevTr.nextSibling : tbody.firstChild;
+                tbody.insertBefore(tr, refNode || null);
+                _rptRowMap.set(r.slip, { tr, hash });
+                prevTr = tr;
+            }
+        });
+
+        // 5. เพิ่ม summary row ใหม่
+        const sr = document.createElement('tr');
+        sr.className = 'summary-row';
+        sr.innerHTML = `<td></td><td colspan="4" style="text-align:center;">รวมทั้งหมด (${totalSlip.toLocaleString()} สลิป)</td>
+            <td align="right">${totalItem.toLocaleString()}</td>
+            <td align="right">${totalAmt.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+            <td colspan="2"></td>`;
+        tbody.appendChild(sr);
+    })
+    .catch(e => {
+        document.getElementById('rpt-tbody').innerHTML =
+            `<tr><td colspan="9" class="error"><h2>AJAX Error</h2>${e.message}</td></tr>`;
+        _rptRowMap.clear();
+    });
 }
 
 // ─── DETAIL MODE JS (รายการขายวันนี้) ───────────────────
@@ -2064,7 +2619,12 @@ function updateDashboard(){
 }
 <?php if(empty($errors)): ?>
 updateDashboard();
-setInterval(function(){ if(document.getElementById('mode-val').value!=='history') updateDashboard(); }, <?= (int)$pos_refresh_interval * 1000 ?>);
+setInterval(function(){
+    const currentMode = document.getElementById('mode-val').value;
+    if (currentMode === 'detail') updateDashboard();
+    else if (currentMode === 'report') updateReport();
+    // history mode ไม่ auto-refresh (ต้องกดค้นหาเอง)
+}, <?= (int)$pos_refresh_interval * 1000 ?>);
 <?php endif; ?>
 // โหลด stat ระบบทันทีเมื่อ page load (สินค้า + สมาชิกทั้งหมด)
 function loadDetailStat() {
@@ -2112,6 +2672,20 @@ $(function(){
     $("select").on("keydown",e=>{
         if(e.key==="Enter"){e.preventDefault();document.getElementById('filter-form').submit();}
     });
+
+    // datepicker สำหรับ report mode
+    const rptOpts={dateFormat:'dd/mm/yy',changeMonth:true,changeYear:true,maxDate:'today',minDate:'today'};
+    $('#rpt-start').datepicker(rptOpts);
+    $('#rpt-start-icon').click(()=>$('#rpt-start').datepicker('show'));
+    // sync ค่าวันนี้เมื่อเปิด
+    if (!$('#rpt-start').val()) $('#rpt-start').datepicker('setDate', 'today');
+
+    // report refresh btn
+    document.getElementById('rpt-refresh-btn').addEventListener('click', updateReport);
+    document.getElementById('rpt-form').addEventListener('submit', function(e){ e.preventDefault(); updateReport(); });
+
+    // โหลดอัตโนมัติถ้า URL เปิดหน้า report โดยตรง
+    if (document.getElementById('mode-val').value === 'report') updateReport();
 });
 
 
