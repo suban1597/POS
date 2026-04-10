@@ -1126,21 +1126,27 @@ SQL;
         return ($bf ? $bf->getTimestamp() : 0) <=> ($af ? $af->getTimestamp() : 0);
     });
 
+    // คำนวณยอดรวม unique สาขา/สมาชิก จากทั้งหมด (ก่อน limit)
+    $total_offices_all = count(array_unique(array_column($rpt_rows, 'sale_office')));
+    $total_members_all = count(array_filter(array_unique(array_column($rpt_rows, 'member_id')), fn($m) => $m !== ''));
+
     // apply limit (ตัดจำนวนรายการที่แสดงผล)
     $rpt_rows = array_slice($rpt_rows, 0, $limit_n);
 
     echo json_encode([
-        'ok'           => true,
-        'refresh_time' => date('d/m/Y H:i:s'),
-        'start_date'   => $start_date,
-        'end_date'     => $end_date,
-        'slip_search'  => $slip_search,
-        'branch_filter'=> $branch_filter,
-        'total_slip'   => $rpt_total_slip ?: count($rpt_rows),
-        'total_item'   => $rpt_total_item,
-        'total_amount' => $rpt_total_amt,
-        'total_line'   => $rpt_total_line,
-        'rows'         => $rpt_rows,
+        'ok'                => true,
+        'refresh_time'      => date('d/m/Y H:i:s'),
+        'start_date'        => $start_date,
+        'end_date'          => $end_date,
+        'slip_search'       => $slip_search,
+        'branch_filter'     => $branch_filter,
+        'total_slip'        => $rpt_total_slip ?: count($rpt_rows),
+        'total_item'        => $rpt_total_item,
+        'total_amount'      => $rpt_total_amt,
+        'total_line'        => $rpt_total_line,
+        'total_offices_all' => $total_offices_all,
+        'total_members_all' => $total_members_all,
+        'rows'              => $rpt_rows,
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -1923,6 +1929,12 @@ tr.no-data { background-color:#330000; color:#ff8888; font-weight:bold; text-ali
         <input type="text" name="slip" id="slip-search" value="<?=htmlspecialchars($slip_search??'')?>" placeholder="เลขสลิป..." autocomplete="off" style="width:180px;">
     </div>
     <div class="form-group">
+        <label>วันที่:</label>
+        <input type="text" name="start" id="start_date" value="<?=htmlspecialchars($start_date)?>" autocomplete="off" required readonly
+               style="cursor:default;background:rgba(0,255,255,0.04);color:#aaa;border-color:#333;">
+        <input type="hidden" name="end" id="end_date" value="<?=htmlspecialchars($start_date)?>">
+    </div>
+    <div class="form-group">
         <label for="detail-branch-select">สาขา:</label>
         <select name="branch" id="detail-branch-select" style="min-width:180px;cursor:pointer;">
             <option value="">— ทุกสาขา —</option>
@@ -1932,16 +1944,6 @@ tr.no-data { background-color:#330000; color:#ff8888; font-weight:bold; text-ali
             </option>
             <?php endforeach; ?>
         </select>
-    </div>
-    <div class="form-group">
-        <label>เริ่มต้น:</label>
-        <input type="text" name="start" id="start_date" value="<?=htmlspecialchars($start_date)?>" placeholder="วว/ดด/ปปปป" autocomplete="off" required readonly style="cursor:pointer;">
-        <i class="fas fa-calendar-alt date-icon" id="start-icon"></i>
-    </div>
-    <div class="form-group">
-        <label>สิ้นสุด:</label>
-        <input type="text" name="end" id="end_date" value="<?=htmlspecialchars($end_date)?>" placeholder="วว/ดด/ปปปป" autocomplete="off" required readonly style="cursor:pointer;">
-        <i class="fas fa-calendar-alt date-icon" id="end-icon"></i>
     </div>
     <button type="submit"><i class="fas fa-search"></i> ค้นหา</button>
     <button type="button" id="refresh-btn" style="display:none;"><i class="fas fa-sync"></i> รีเฟรช</button>
@@ -1988,6 +1990,9 @@ tr.no-data { background-color:#330000; color:#ff8888; font-weight:bold; text-ali
     </div>
 </div>
 
+<div style="text-align:right;color:#aaa;font-size:12px;margin-bottom:6px;">
+    รีเฟรชล่าสุด: <span id="detail-refresh-time">-</span>
+</div>
 <canvas id="salesChart" height="100" style="display:none;"></canvas>
 
 <table id="branch-table">
@@ -2017,6 +2022,12 @@ tr.no-data { background-color:#330000; color:#ff8888; font-weight:bold; text-ali
                placeholder="เลขสลิป..." autocomplete="off" style="width:180px;">
     </div>
     <div class="form-group">
+        <label>วันที่:</label>
+        <input type="text" name="start" id="rpt-start" value="<?=htmlspecialchars($start_date)?>"
+               autocomplete="off" required readonly
+               style="cursor:default;background:rgba(168,85,247,0.04);color:#aaa;border-color:#333;">
+    </div>
+    <div class="form-group">
         <label for="rpt-branch-select">สาขา:</label>
         <select name="branch" id="rpt-branch-select" style="min-width:180px;cursor:pointer;">
             <option value="">— ทุกสาขา —</option>
@@ -2026,12 +2037,6 @@ tr.no-data { background-color:#330000; color:#ff8888; font-weight:bold; text-ali
             </option>
             <?php endforeach; ?>
         </select>
-    </div>
-    <div class="form-group">
-        <label>วันที่:</label>
-        <input type="text" name="start" id="rpt-start" value="<?=htmlspecialchars($start_date)?>"
-               placeholder="วว/ดด/ปปปป" autocomplete="off" required readonly style="cursor:pointer;">
-        <i class="fas fa-calendar-alt date-icon" id="rpt-start-icon"></i>
     </div>
     <div class="form-group">
         <label>แสดง:</label>
@@ -2055,12 +2060,12 @@ tr.no-data { background-color:#330000; color:#ff8888; font-weight:bold; text-ali
     <div style="background:linear-gradient(135deg,rgba(0,200,83,0.2),rgba(0,150,60,0.2));border:2px solid #00c853;border-radius:14px;padding:18px 36px;text-align:center;box-shadow:0 0 24px rgba(0,200,83,0.2);min-width:200px;">
         <div style="color:#aaa;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;"><i class="fas fa-store" style="margin-right:6px;"></i>สาขาที่มีข้อมูล</div>
         <div style="font-size:42px;font-weight:bold;color:#00e676;text-shadow:0 0 16px rgba(0,200,83,0.6);" id="rpt-online-count">0</div>
-        <div style="color:#aaa;font-size:12px;margin-top:4px;">สาขา</div>
+        <div style="color:#aaa;font-size:12px;margin-top:4px;">จาก <span id="rpt-online-count-all" style="color:#00e676;">0</span> สาขา</div>
     </div>
     <div style="background:linear-gradient(135deg,rgba(255,107,53,0.2),rgba(200,80,30,0.2));border:2px solid #ff6b35;border-radius:14px;padding:18px 36px;text-align:center;box-shadow:0 0 24px rgba(255,107,53,0.2);min-width:200px;">
         <div style="color:#aaa;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;"><i class="fas fa-user-check" style="margin-right:6px;"></i>สมาชิก</div>
         <div style="font-size:42px;font-weight:bold;color:#ff6b35;text-shadow:0 0 16px rgba(255,107,53,0.6);" id="rpt-total-members">0</div>
-        <div style="color:#aaa;font-size:12px;margin-top:4px;">คน</div>
+        <div style="color:#aaa;font-size:12px;margin-top:4px;">จาก <span id="rpt-total-members-all" style="color:#ff6b35;">0</span> คน</div>
     </div>
     <div style="background:linear-gradient(135deg,rgba(33,150,243,0.2),rgba(21,101,192,0.2));border:2px solid #42a5f5;border-radius:14px;padding:18px 36px;text-align:center;box-shadow:0 0 24px rgba(33,150,243,0.2);min-width:200px;">
         <div style="color:#aaa;font-size:12px;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;"><i class="fas fa-receipt" style="margin-right:6px;"></i>จำนวนสลิป</div>
@@ -2348,14 +2353,18 @@ function updateReport() {
         if (d.rows && d.rows.length > 0) {
             const uniqueOffices = new Set(d.rows.map(r => r.sale_office));
             const uniqueMembers = new Set(d.rows.filter(r => r.member_id && r.member_id !== '-' && r.member_id !== '').map(r => r.member_id));
-            if (document.getElementById('rpt-online-count'))  document.getElementById('rpt-online-count').innerText  = uniqueOffices.size.toLocaleString();
-            if (document.getElementById('rpt-total-members')) document.getElementById('rpt-total-members').innerText = uniqueMembers.size.toLocaleString();
+            if (document.getElementById('rpt-online-count'))      document.getElementById('rpt-online-count').innerText      = uniqueOffices.size.toLocaleString();
+            if (document.getElementById('rpt-online-count-all'))  document.getElementById('rpt-online-count-all').innerText  = Number(d.total_offices_all||0).toLocaleString();
+            if (document.getElementById('rpt-total-members'))     document.getElementById('rpt-total-members').innerText     = uniqueMembers.size.toLocaleString();
+            if (document.getElementById('rpt-total-members-all')) document.getElementById('rpt-total-members-all').innerText = Number(d.total_members_all||0).toLocaleString();
             // ใช้ total_line จาก PHP (unique barcode count) เหมือน detail mode
-            if (document.getElementById('rpt-total-line'))    document.getElementById('rpt-total-line').innerText    = Number(d.total_line||0).toLocaleString();
+            if (document.getElementById('rpt-total-line'))        document.getElementById('rpt-total-line').innerText        = Number(d.total_line||0).toLocaleString();
         } else {
-            if (document.getElementById('rpt-online-count'))  document.getElementById('rpt-online-count').innerText  = '0';
-            if (document.getElementById('rpt-total-members')) document.getElementById('rpt-total-members').innerText = '0';
-            if (document.getElementById('rpt-total-line'))    document.getElementById('rpt-total-line').innerText    = '0';
+            if (document.getElementById('rpt-online-count'))      document.getElementById('rpt-online-count').innerText      = '0';
+            if (document.getElementById('rpt-online-count-all'))  document.getElementById('rpt-online-count-all').innerText  = '0';
+            if (document.getElementById('rpt-total-members'))     document.getElementById('rpt-total-members').innerText     = '0';
+            if (document.getElementById('rpt-total-members-all')) document.getElementById('rpt-total-members-all').innerText = '0';
+            if (document.getElementById('rpt-total-line'))        document.getElementById('rpt-total-line').innerText        = '0';
         }
 
         // ── กรณีไม่มีข้อมูล ─────────────────────────────────────────────
@@ -2462,7 +2471,8 @@ function updateDashboard(){
     const startEl=document.getElementById('start_date');
     const endEl=document.getElementById('end_date');
     if(startEl) p.set('start', startEl.value);
-    if(endEl)   p.set('end',   endEl.value);
+    // detail mode ใช้วันเดียว — end = start เสมอ
+    p.set('end', startEl ? startEl.value : (endEl ? endEl.value : ''));
     const slipEl=document.getElementById('slip-search');
     if(slipEl)  p.set('slip',  slipEl.value);
     fetch('?'+p.toString())
@@ -2475,6 +2485,7 @@ function updateDashboard(){
         }
 
         const elRT=document.getElementById('refresh-time'); if(elRT) elRT.innerText=d.refresh_time;
+        const elDRT=document.getElementById('detail-refresh-time'); if(elDRT) elDRT.innerText=d.refresh_time;
         const elDR=document.getElementById('date-range'); if(elDR) elDR.innerText=d.start_date+' - '+d.end_date;
 
         if(d.no_data_global || !d.branches || d.branches.length===0){
@@ -2647,38 +2658,24 @@ loadDetailStat(); // เรียกทันทีที่ page โหลด
 
 document.getElementById('refresh-btn').addEventListener('click', updateDashboard);
 $(function(){
-    const isHistMode = document.getElementById('mode-val').value === 'history';
-    const opts={
-	dateFormat:'dd/mm/yy',
-	changeMonth:true,
-	changeYear:true,
-	maxDate:'today',
-	minDate:isHistMode?null:'today'
-	};
-    $("#start_date, #end_date").datepicker(opts);
-    $("#start-icon").click(()=>$("#start_date").datepicker("show"));
-    $("#end-icon").click(()=>$("#end_date").datepicker("show"));
-    $("#start_date").change(function(){$("#end_date").datepicker("option","minDate",$(this).val());});
-    $("#end_date").change(function(){$("#start_date").datepicker("option","maxDate",$(this).val());});
+    // ── Detail mode: วันที่ล็อคเป็นวันนี้เสมอ sync hidden end_date ──
     const today=new Date();
     const todayStr=("0"+today.getDate()).slice(-2)+'/'+ ("0"+(today.getMonth()+1)).slice(-2)+'/'+today.getFullYear();
-    ["#start_date","#end_date"].forEach(sel=>{
-        $(sel).on("dblclick",function(){
-            $(this).val(todayStr);
-            $(this).datepicker("setDate",todayStr);
-            setTimeout(()=>document.getElementById('filter-form').submit(),100);
-        });
-    });
+    const sdEl = document.getElementById('start_date');
+    const edEl = document.getElementById('end_date');
+    if (sdEl) sdEl.value = todayStr;
+    if (edEl) edEl.value = todayStr;
+
     $("select").on("keydown",e=>{
         if(e.key==="Enter"){e.preventDefault();document.getElementById('filter-form').submit();}
     });
 
-    // datepicker สำหรับ report mode
-    const rptOpts={dateFormat:'dd/mm/yy',changeMonth:true,changeYear:true,maxDate:'today',minDate:'today'};
-    $('#rpt-start').datepicker(rptOpts);
-    $('#rpt-start-icon').click(()=>$('#rpt-start').datepicker('show'));
-    // sync ค่าวันนี้เมื่อเปิด
-    if (!$('#rpt-start').val()) $('#rpt-start').datepicker('setDate', 'today');
+    // report date: ล็อควันนี้เสมอ ไม่มี datepicker
+    const rptStartEl = document.getElementById('rpt-start');
+    if (rptStartEl && !rptStartEl.value) {
+        const _n=new Date();
+        rptStartEl.value=("0"+_n.getDate()).slice(-2)+'/'+ ("0"+(_n.getMonth()+1)).slice(-2)+'/'+_n.getFullYear();
+    }
 
     // report refresh btn
     document.getElementById('rpt-refresh-btn').addEventListener('click', updateReport);

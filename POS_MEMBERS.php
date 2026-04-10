@@ -1754,7 +1754,7 @@ canvas { background:rgba(0,0,0,0.4); border-radius:12px; margin:30px 0; border:2
     <input type="hidden" name="mode" id="mode-input" value="<?=htmlspecialchars($mode)?>">
     <!-- ปุ่มสลับโหมดซื้อสินค้า -->
     <div style="margin-bottom:10px;" id="purchase-mode-row">
-        <label style="color:#ffcc00;font-size:14px;margin-right:8px;"><i class="fas fa-history"></i> โหมดข้อมูล:</label>
+        <label style="color:#ffcc00;font-size:14px;margin-right:8px;"><i class="fas fa-history"></i> โหมดเวลา:</label>
         <button type="button" id="btn-mode-today" onclick="setPurchaseMode('today')"
             style="padding:7px 18px;border-radius:6px;border:2px solid #0ff;cursor:pointer;font-weight:bold;font-size:13px;
                    background:<?=$mode==='today'?'#0ff':'transparent'?>;color:<?=$mode==='today'?'#000':'#0ff'?>;">
@@ -1768,7 +1768,7 @@ canvas { background:rgba(0,0,0,0.4); border-radius:12px; margin:30px 0; border:2
     </div>
     <!-- ปุ่มสลับโหมด -->
     <div style="margin-bottom:14px;">
-        <label style="color:#ffcc00; font-size:15px; margin-right:12px;"><i class="fas fa-toggle-on"></i> โหมดค้นหา:</label>
+        <label style="color:#ffcc00; font-size:15px; margin-right:12px;"><i class="fas fa-toggle-on"></i> โหมดข้อมูล:</label>
         <button type="button" id="btn-mode-purchase" onclick="setSearchType('purchase')"
             class="mode-btn <?=$search_type==='purchase'?'mode-active-purchase':''?>">
             <i class="fas fa-shopping-cart"></i> ซื้อสินค้า
@@ -1790,15 +1790,27 @@ canvas { background:rgba(0,0,0,0.4); border-radius:12px; margin:30px 0; border:2
     </div>
     <!-- ตัวกรองเฉพาะโหมด purchase -->
     <span id="purchase-filters" style="display:<?=$search_type==='point'?'none':'inline'?>;">
-    <div class="form-group">
-        <label for="start_date">เริ่มต้น:</label>
-        <input type="text" name="start" id="start_date" value="<?=htmlspecialchars($start_date)?>" placeholder="วว/ดด/ปปปป" autocomplete="off" readonly style="cursor:pointer;">
-        <i class="fas fa-calendar-alt date-icon" id="start-icon"></i>
+    <div class="form-group" id="date-group-start">
+        <label id="date-label-start" for="start_date"><?= $mode==='today' ? 'วันที่:' : 'เริ่มต้น:' ?></label>
+        <input type="text" name="start" id="start_date" value="<?=htmlspecialchars($start_date)?>" placeholder="วว/ดด/ปปปป" autocomplete="off" readonly
+               style="<?= $mode==='today' ? 'cursor:default;background:rgba(0,255,255,0.04);color:#aaa;border-color:#333;' : 'cursor:pointer;' ?>">
+        <i class="fas fa-calendar-alt date-icon" id="start-icon" style="<?= $mode==='today' ? 'display:none;' : '' ?>"></i>
     </div>
-    <div class="form-group">
+    <div class="form-group" id="date-group-end" style="<?= $mode==='today' ? 'display:none;' : '' ?>">
         <label for="end_date">สิ้นสุด:</label>
         <input type="text" name="end" id="end_date" value="<?=htmlspecialchars($end_date)?>" placeholder="วว/ดด/ปปปป" autocomplete="off" readonly style="cursor:pointer;">
         <i class="fas fa-calendar-alt date-icon" id="end-icon"></i>
+    </div>
+    <div class="form-group" id="branch-group" style="display:inline-block;">
+        <label for="branch-select">สาขา:</label>
+        <select name="branch" id="branch-select" style="min-width:160px;cursor:pointer;">
+            <option value="">— ทุกสาขา —</option>
+            <?php foreach ($office_list as $code => $name): ?>
+            <option value="<?=htmlspecialchars($code)?>" <?=$branch_filter===$code?'selected':''?>>
+                <?=htmlspecialchars($name)?> (<?=htmlspecialchars($code)?>)
+            </option>
+            <?php endforeach; ?>
+        </select>
     </div>
     <div class="form-group">
         <label for="top_n">อันดับ:</label>
@@ -1820,17 +1832,6 @@ canvas { background:rgba(0,0,0,0.4); border-radius:12px; margin:30px 0; border:2
         <span style="color:#aaa;font-size:12px;margin-left:4px;">ครั้ง</span>
     </div>
     </span><!-- /purchase-filters -->
-    <div class="form-group" id="branch-group" style="display:inline-block;">
-        <label for="branch-select">สาขา:</label>
-        <select name="branch" id="branch-select" style="min-width:160px;cursor:pointer;">
-            <option value="">— ทุกสาขา —</option>
-            <?php foreach ($office_list as $code => $name): ?>
-            <option value="<?=htmlspecialchars($code)?>" <?=$branch_filter===$code?'selected':''?>>
-                <?=htmlspecialchars($name)?> (<?=htmlspecialchars($code)?>)
-            </option>
-            <?php endforeach; ?>
-        </select>
-    </div>
     <button type="button" onclick="updateDashboard()"><i class="fas fa-search"></i> ค้นหา</button>
     <button type="button" id="refresh-btn" style="display:none;"><i class="fas fa-sync"></i> รีเฟรช</button>
 </form>
@@ -1861,6 +1862,9 @@ canvas { background:rgba(0,0,0,0.4); border-radius:12px; margin:30px 0; border:2
     </div>
 </div>
 <h2 style="color:#0ff; margin-top:40px; text-align:center;">จำนวนสมาชิกต่อสาขา</h2>
+<div style="text-align:right;color:#aaa;font-size:12px;margin-bottom:6px;">
+    รีเฟรชล่าสุด: <span id="members-refresh-time">-</span>
+</div>
 <canvas id="branchChart" height="80"></canvas>
 <div style="text-align:center; margin-top:20px; font-size:28px; font-weight:bold; color:#0ff;">
 รวมยอดซื้อ: <span id="total-amount">0.00</span> บาท
@@ -2026,15 +2030,33 @@ function setPurchaseMode(mode) {
     const yest = new Date(now); yest.setDate(yest.getDate()-1);
     const yesterdayStr = ("0"+yest.getDate()).slice(-2)+'/'+("0"+(yest.getMonth()+1)).slice(-2)+'/'+yest.getFullYear();
     const targetDate = isHistory ? yesterdayStr : todayStr;
-    if (typeof $ !== 'undefined' && $.datepicker) {
-        const minD = isHistory ? new Date(2000,0,1) : 'today';
-        $('#start_date,#end_date').datepicker('option','minDate', minD);
-        $('#start_date,#end_date').datepicker('option','maxDate','today');
-        $('#start_date').datepicker('setDate', targetDate);
-        $('#end_date').datepicker('setDate', targetDate);
+
+    const sdEl   = document.getElementById('start_date');
+    const edEl   = document.getElementById('end_date');
+    const siEl   = document.getElementById('start-icon');
+    const lbEl   = document.getElementById('date-label-start');
+    const dgEnd  = document.getElementById('date-group-end');
+
+    if (!isHistory) {
+        // ── today: วันเดียว ล็อคไม่ให้เปลี่ยน ──
+        if (sdEl) { sdEl.value = todayStr; sdEl.style.cursor = 'default'; sdEl.style.background = 'rgba(0,255,255,0.04)'; sdEl.style.color = '#aaa'; sdEl.style.borderColor = '#333'; }
+        if (edEl) edEl.value = todayStr;
+        if (siEl) siEl.style.display = 'none';
+        if (lbEl) lbEl.textContent = 'วันที่:';
+        if (dgEnd) dgEnd.style.display = 'none';
     } else {
-        document.getElementById('start_date').value = targetDate;
-        document.getElementById('end_date').value = targetDate;
+        // ── history: 2 ช่อง เปิดใช้งานได้ ──
+        if (sdEl) { sdEl.value = yesterdayStr; sdEl.style.cursor = 'pointer'; sdEl.style.background = ''; sdEl.style.color = ''; sdEl.style.borderColor = ''; }
+        if (edEl) edEl.value = yesterdayStr;
+        if (siEl) siEl.style.display = '';
+        if (lbEl) lbEl.textContent = 'เริ่มต้น:';
+        if (dgEnd) dgEnd.style.display = '';
+        if (typeof $ !== 'undefined' && $.datepicker) {
+            $('#start_date,#end_date').datepicker('option','minDate', new Date(2000,0,1));
+            $('#start_date,#end_date').datepicker('option','maxDate','today');
+            $('#start_date').datepicker('setDate', yesterdayStr);
+            $('#end_date').datepicker('setDate', yesterdayStr);
+        }
     }
     // เคลียร์หน้าจอทุกครั้งที่สลับโหมด + จัดการ timer
     _stopAutoRefresh();
@@ -2101,12 +2123,18 @@ function setSearchType(type) {
     } else {
         _stopAutoRefresh();
     }
-    // เมื่อสลับมา yearly: ปลด minDate เพื่อให้เลือกย้อนหลังได้ แต่ไม่บังคับเปลี่ยน mode
+    // เมื่อสลับมา yearly: ปลด minDate เพื่อให้เลือกย้อนหลังได้ แต่เฉพาะ history mode
     if (isYearly) {
-        if (typeof $ !== 'undefined' && $.datepicker) {
-            $('#start_date,#end_date').datepicker('option', 'minDate', new Date(2000,0,1));
-            $('#start_date,#end_date').datepicker('option', 'maxDate', 'today');
+        const curPMode = document.getElementById('mode-input').value;
+        if (curPMode === 'history') {
+            if (typeof $ !== 'undefined' && $.datepicker) {
+                $('#start_date,#end_date').datepicker('option', 'minDate', new Date(2000,0,1));
+                $('#start_date,#end_date').datepicker('option', 'maxDate', 'today');
+            }
+            const dgEnd2 = document.getElementById('date-group-end');
+            if (dgEnd2) dgEnd2.style.display = '';
         }
+        // today + yearly: คงล็อคไว้ ใช้วันนี้เป็น base year
     }
 }
 
@@ -2337,6 +2365,7 @@ function updateDashboard() {
     .then(d => {
         if (d.error) throw new Error(d.error);
         document.getElementById('refresh-time').innerText = d.refresh_time;
+        const _mrt = document.getElementById('members-refresh-time'); if(_mrt) _mrt.innerText = d.refresh_time;
         document.getElementById('date-range').innerText = d.start_date + ' - ' + d.end_date;
         document.getElementById('total-amount').innerText = Number(d.total_amount).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
         document.getElementById('total-members').innerText = d.total_members;
@@ -2610,19 +2639,30 @@ $(function() {
     };
     $("#start_date").datepicker(options);
     $("#end_date").datepicker(options);
-    $("#start-icon").on("click", () => $("#start_date").datepicker("show"));
-    $("#end-icon").on("click", () => $("#end_date").datepicker("show"));
-    $("#start_date").on("change", function() { $("#end_date").datepicker("option", "minDate", this.value); });
-    $("#end_date").on("change", function() { $("#start_date").datepicker("option", "maxDate", this.value); });
-    const today = new Date();
-    const todayStr = ("0"+today.getDate()).slice(-2) + '/' + ("0"+(today.getMonth()+1)).slice(-2) + '/' + today.getFullYear();
-    ["#start_date", "#end_date"].forEach(sel => {
-        $(sel).on("dblclick", function() {
-            $(this).val(todayStr);
-            $(this).datepicker("setDate", todayStr);
-            if (document.getElementById('search_type').value !== 'point') updateDashboard();
+
+    // ── icon click และ datepicker change: เปิดเฉพาะ history mode ──
+    if (isHist) {
+        $("#start-icon").on("click", () => $("#start_date").datepicker("show"));
+        $("#end-icon").on("click",   () => $("#end_date").datepicker("show"));
+        $("#start_date").on("change", function() { $("#end_date").datepicker("option", "minDate", this.value); });
+        $("#end_date").on("change",   function() { $("#start_date").datepicker("option", "maxDate", this.value); });
+        const today = new Date();
+        const todayStr = ("0"+today.getDate()).slice(-2) + '/' + ("0"+(today.getMonth()+1)).slice(-2) + '/' + today.getFullYear();
+        ["#start_date", "#end_date"].forEach(sel => {
+            $(sel).on("dblclick", function() {
+                $(this).val(todayStr);
+                $(this).datepicker("setDate", todayStr);
+                if (document.getElementById('search_type').value !== 'point') updateDashboard();
+            });
         });
-    });
+    } else {
+        // today mode: ล็อควันที่เป็นวันนี้เสมอ
+        const now = new Date();
+        const todayStr = ("0"+now.getDate()).slice(-2) + '/' + ("0"+(now.getMonth()+1)).slice(-2) + '/' + now.getFullYear();
+        if (document.getElementById('start_date')) document.getElementById('start_date').value = todayStr;
+        if (document.getElementById('end_date'))   document.getElementById('end_date').value   = todayStr;
+    }
+
     $("#sort_by").on("change", function() { updateDashboard(); });
     $("#member_id_filter").on("keypress", function(e) { if (e.which === 13) updateDashboard(); });
     $("input[name='min_slips']").on("keypress", function(e) { if (e.which === 13) updateDashboard(); });

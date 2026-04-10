@@ -890,43 +890,21 @@ SQL;
         $year_labels[] = $yr . ' (' . $date_ranges[$yr]['start'] . '–' . $date_ranges[$yr]['end'] . ')';
     }
 
-    // ── ดึง OFFICE_NAME_ENG สำหรับ tooltip ──────────────────────
-    $office_eng_map = [];
-    $eng_sql = "SET ECHO OFF FEEDBACK OFF HEADING OFF PAGESIZE 0 LINESIZE 300 TRIMSPOOL ON\n"
-             . "ALTER SESSION SET NLS_LANGUAGE = American;\n"
-             . "SELECT TRIM(SALE_OFFICE)||'|'||NVL(TRIM(OFFICE_NAME_ENG),NVL(TRIM(OFFICE_NAME),TRIM(SALE_OFFICE)))\n"
-             . "FROM POS.POS_SALE_OFFICE\n"
-             . "WHERE SALE_OFFICE IS NOT NULL AND TRIM(SALE_OFFICE) IS NOT NULL\n"
-             . "ORDER BY SALE_OFFICE;\nEXIT;\n";
-    $eng_tmp = sys_get_temp_dir() . '/POS_ENG_' . uniqid() . '.sql';
-    file_put_contents($eng_tmp, $eng_sql);
-    $eng_out = (string)shell_exec("env -i LD_LIBRARY_PATH={$instant_client_path} TNS_ADMIN={$instant_client_path} NLS_LANG=THAI_THAILAND.AL32UTF8 {$sqlplus_path} -s {$up} @{$eng_tmp} 2>&1");
-    @unlink($eng_tmp);
-    foreach (preg_split('/\r?\n/', $eng_out) as $el) {
-        $el = trim($el);
-        if ($el === '' || preg_match('/^(ORA-|SP2-)/', $el)) continue;
-        $ep = explode('|', $el, 2);
-        if (count($ep) === 2 && $ep[0] !== '') {
-            $office_eng_map[trim($ep[0])] = trim($ep[1]);
-        }
-    }
-
     echo json_encode([
-        'mode'            => 'bestseller',
-        'years'           => $years,
-        'year_labels'     => $year_labels,
-        'date_ranges'     => $date_ranges,
-        'items'           => $items,
-        'total_items'     => $total_items ?: count($items),
-        'shown_items'     => count($items),
-        'sort_by'         => $sort_by,
-        'branch_filter'   => $branch_filter,
-        'item_group'      => $item_group,
-        'search'          => $search,
-        'start_date'      => $date_ranges[$base_year]['start'],
-        'end_date'        => $date_ranges[$base_year]['end'],
-        'refresh_time'    => date('d/m/Y H:i:s'),
-        'office_eng_map'  => $office_eng_map,
+        'mode'         => 'bestseller',
+        'years'        => $years,
+        'year_labels'  => $year_labels,
+        'date_ranges'  => $date_ranges,
+        'items'        => $items,
+        'total_items'  => $total_items ?: count($items),
+        'shown_items'  => count($items),
+        'sort_by'      => $sort_by,
+        'branch_filter'=> $branch_filter,
+        'item_group'   => $item_group,
+        'search'       => $search,
+        'start_date'   => $date_ranges[$base_year]['start'],
+        'end_date'     => $date_ranges[$base_year]['end'],
+        'refresh_time' => date('d/m/Y H:i:s'),
     ], JSON_UNESCAPED_UNICODE);
     exit;
 }
@@ -1879,7 +1857,7 @@ tr.no-data { background-color:#330000; color:#ff8888; font-weight:bold; text-ali
 
         <!-- แถวที่ 1: วันนี้ / ย้อนหลัง -->
         <div style="margin-bottom:10px;">
-            <label style="color:#ffcc00;font-size:14px;margin-right:8px;"><i class="fas fa-history"></i> โหมดข้อมูล:</label>
+            <label style="color:#ffcc00;font-size:14px;margin-right:8px;"><i class="fas fa-history"></i> โหมดเวลา:</label>
             <button type="button" id="btn-mode-today" onclick="setPurchaseMode('today')"
                 style="padding:7px 18px;border-radius:6px;border:2px solid #0ff;cursor:pointer;font-weight:bold;font-size:13px;
                        background:<?= $mode==='today'?'#0ff':'transparent' ?>;color:<?= $mode==='today'?'#000':'#0ff' ?>;">
@@ -1894,7 +1872,7 @@ tr.no-data { background-color:#330000; color:#ff8888; font-weight:bold; text-ali
 
         <!-- แถวที่ 2: ยอดขาย / ค้นหาสินค้า / สินค้าขายดี -->
         <div style="margin-bottom:14px;">
-            <label style="color:#ffcc00; font-size:15px; margin-right:12px;"><i class="fas fa-toggle-on"></i> โหมดค้นหา:</label>
+            <label style="color:#ffcc00; font-size:15px; margin-right:12px;"><i class="fas fa-toggle-on"></i> โหมดข้อมูล:</label>
             <button type="button" id="mode-sales-btn" onclick="setSearchMode('sales')"
                 style="padding:9px 22px;border-radius:6px;border:2px solid #0ff;cursor:pointer;font-weight:bold;font-size:13px;
                        background:<?= $search_mode==='sales'?'#0ff':'transparent' ?>;
@@ -1922,15 +1900,17 @@ tr.no-data { background-color:#330000; color:#ff8888; font-weight:bold; text-ali
                 <input type="text" name="search" value="<?=htmlspecialchars($search)?>" placeholder="บาร์โค้ด/ชื่อสินค้า" style="width:200px;">
             </div>
             <div class="form-group" id="date-group-start" style="margin:0;">
-                <label>เริ่มต้น:</label>
-                <input type="text" name="start" id="start_date" value="<?=htmlspecialchars($start_date)?>" required readonly style="cursor:pointer;">
-                <i class="fas fa-calendar-alt date-icon" id="start-icon"></i>
+                <label id="date-label-start"><?= $mode==='today' ? 'วันที่:' : 'เริ่มต้น:' ?></label>
+                <input type="text" name="start" id="start_date" value="<?=htmlspecialchars($start_date)?>" required readonly
+                       style="<?= $mode==='today' ? 'cursor:default;background:rgba(0,255,255,0.04);color:#aaa;border-color:#333;' : 'cursor:pointer;' ?>">
+                <i class="fas fa-calendar-alt date-icon" id="start-icon" style="<?= $mode==='today' ? 'display:none;' : '' ?>"></i>
             </div>
-            <div class="form-group" id="date-group-end" style="margin:0;">
+            <div class="form-group" id="date-group-end" style="margin:0;<?= $mode==='today' ? 'display:none;' : '' ?>">
                 <label>สิ้นสุด:</label>
                 <input type="text" name="end" id="end_date" value="<?=htmlspecialchars($end_date)?>" required readonly style="cursor:pointer;">
                 <i class="fas fa-calendar-alt date-icon" id="end-icon"></i>
             </div>
+            <input type="hidden" id="end_date_hidden" name="" value="<?=htmlspecialchars($end_date)?>"><?php // ใช้เฉพาะ today mode ?>
             <div class="form-group" id="branch-group" style="margin:0;">
                 <label>สาขา:</label>
                 <select name="branch" id="branch">
@@ -1998,6 +1978,9 @@ tr.no-data { background-color:#330000; color:#ff8888; font-weight:bold; text-ali
         <div style="font-size:12px; color:#aaa; margin-top:4px;" id="last-product-date">-</div>
     </div>
 </div>
+<div style="text-align:right;color:#aaa;font-size:12px;margin-bottom:6px;">
+    รีเฟรชล่าสุด: <span id="items-refresh-time">-</span>
+</div>
 <canvas id="itemChart" height="80"></canvas>
 <div style="text-align:center; margin-top:20px; font-size:28px; font-weight:bold; color:#0ff;">
     แสดง: <span id="total-items">0</span> รายการ <span id="total-items-from" style="font-size:20px;color:#aaa;font-weight:normal;"></span>
@@ -2064,15 +2047,33 @@ function setPurchaseMode(mode) {
     const yest = new Date(now); yest.setDate(yest.getDate()-1);
     const yesterdayStr = ("0"+yest.getDate()).slice(-2)+'/'+("0"+(yest.getMonth()+1)).slice(-2)+'/'+yest.getFullYear();
     const targetDate = isToday ? todayStr : yesterdayStr;
-    if (typeof $ !== 'undefined' && $.datepicker) {
-        const minD = isToday ? 'today' : new Date(2000,0,1);
-        $('#start_date,#end_date').datepicker('option','minDate', minD);
-        $('#start_date,#end_date').datepicker('option','maxDate','today');
-        $('#start_date').datepicker('setDate', targetDate);
-        $('#end_date').datepicker('setDate', targetDate);
+
+    const sdEl = document.getElementById('start_date');
+    const edEl = document.getElementById('end_date');
+    const siEl = document.getElementById('start-icon');
+    const lbEl = document.getElementById('date-label-start');
+    const dgEnd = document.getElementById('date-group-end');
+
+    if (isToday) {
+        // ── today: วันเดียว ล็อคไม่ให้เปลี่ยน ──
+        if (sdEl) { sdEl.value = todayStr; sdEl.style.cursor = 'default'; sdEl.style.background = 'rgba(0,255,255,0.04)'; sdEl.style.color = '#aaa'; sdEl.style.borderColor = '#333'; }
+        if (edEl) { edEl.value = todayStr; }
+        if (siEl) siEl.style.display = 'none';
+        if (lbEl) lbEl.textContent = 'วันที่:';
+        if (dgEnd) dgEnd.style.display = 'none';
     } else {
-        document.getElementById('start_date').value = targetDate;
-        document.getElementById('end_date').value   = targetDate;
+        // ── history: 2 ช่อง เปิดใช้งานได้ ──
+        if (sdEl) { sdEl.value = yesterdayStr; sdEl.style.cursor = 'pointer'; sdEl.style.background = ''; sdEl.style.color = ''; sdEl.style.borderColor = ''; }
+        if (edEl) { edEl.value = yesterdayStr; }
+        if (siEl) siEl.style.display = '';
+        if (lbEl) lbEl.textContent = 'เริ่มต้น:';
+        // date-group-end จะถูกควบคุมโดย setSearchMode
+        if (typeof $ !== 'undefined' && $.datepicker) {
+            $('#start_date,#end_date').datepicker('option','minDate', new Date(2000,0,1));
+            $('#start_date,#end_date').datepicker('option','maxDate','today');
+            $('#start_date').datepicker('setDate', yesterdayStr);
+            $('#end_date').datepicker('setDate', yesterdayStr);
+        }
     }
     // timer control: ปิด auto-refresh เสมอก่อน จากนั้นเปิดเฉพาะ today + sales
     _stopAutoRefresh();
@@ -2118,7 +2119,9 @@ function setSearchMode(mode) {
     const _show = (id, show) => { const e = document.getElementById(id); if (e) e.style.display = show ? '' : 'none'; };
     _show('search-group',          true);         // ทุก mode: ค้นหา ✅✅✅
     _show('date-group-start',      !isProduct);   // sales✅ product❌ bestseller✅
-    _show('date-group-end',        !isProduct);   // sales✅ product❌ bestseller✅
+    // date-group-end: แสดงเฉพาะ history mode เท่านั้น (today ใช้วันเดียว)
+    const _isPurchaseToday = document.getElementById('mode-input').value !== 'history';
+    _show('date-group-end',        !isProduct && !_isPurchaseToday);
     _show('branch-group',          !isProduct);   // sales✅ product❌ bestseller✅
     _show('limit-group',           true);         // ทุก mode: แสดง(limit) ✅✅✅
     _show('sort-group',            !isProduct);   // sales✅ product❌ bestseller✅
@@ -2309,10 +2312,11 @@ function updateData(isAutoRefresh) {
                     `<tr><td colspan="100" style="color:#ff6b6b; padding:20px; text-align:center;">${d.error}</td></tr>`;
                 document.getElementById('pivot-head').innerHTML = '';
                 document.getElementById('refresh-time').innerText = 'ERROR';
-                document.getElementById('itemChart').style.display = 'none';
+                const _irt1 = document.getElementById('items-refresh-time'); if(_irt1) _irt1.innerText = 'ERROR';
                 return;
             }
             document.getElementById('refresh-time').innerText = d.refresh_time;
+            const _irt2 = document.getElementById('items-refresh-time'); if(_irt2) _irt2.innerText = d.refresh_time;
             if (d.search_mode === 'product') {
                 console.log('[Product] total:', d.product_total, '| shown:', d.products ? d.products.length : 0, '| cond:', d.debug_cond);
                 if (d.debug_raw) console.log('[Product RAW]', d.debug_raw);
@@ -2330,6 +2334,7 @@ function updateData(isAutoRefresh) {
             if (d.raw_output) console.log('[RAW Oracle Output]\n', d.raw_output);
           
             document.getElementById('refresh-time').innerText = d.refresh_time;
+            const _irt3 = document.getElementById('items-refresh-time'); if(_irt3) _irt3.innerText = d.refresh_time;
             const modeLabel = d.data_mode === 'history' ? ' [ย้อนหลัง]' : '';
             document.getElementById('date-range').innerText = d.start_date + ' - ' + d.end_date + modeLabel;
             const shownCount = d.shown_items || d.pivot.length;
@@ -2661,10 +2666,9 @@ function _positionBsTip(e) {
 }
 
 function renderBestsellerTable(d) {
-    const years       = d.years;
-    const allItems    = d.items;
-    const total       = d.total_items || allItems.length;
-    const offEngMap   = d.office_eng_map || {};
+    const years    = d.years;
+    const allItems = d.items;
+    const total    = d.total_items || allItems.length;
 
     const _sl = document.getElementById('sort-label');
     if (_sl) _sl.innerText = d.sort_by === 'qty' ? 'จำนวน' : 'ยอดขาย';
@@ -2892,8 +2896,7 @@ function renderBestsellerTable(d) {
                 const yrBE = yr + 543;
                 let tipRows = `<table>`;
                 brEntries.forEach(([off, q]) => {
-                    const offLabel = offEngMap[off] || off;
-                    tipRows += `<tr><td class="tip-office">${offLabel}</td><td>${fmtN(q)}</td></tr>`;
+                    tipRows += `<tr><td class="tip-office">${off}</td><td>${fmtN(q)}</td></tr>`;
                 });
                 tipRows += `</table>`;
                 const tipHTML = `<div style="color:#ff9999;font-size:11px;margin-bottom:4px;border-bottom:1px solid #660000;padding-bottom:3px;">📦 จำนวนต่อสาขา (${yrBE})</div>${tipRows}`;
@@ -3098,53 +3101,58 @@ $(function() {
     };
   
     $("#start_date, #end_date").datepicker(opts);
-    $("#start-icon").click(() => $("#start_date").datepicker("show"));
-    $("#end-icon").click(() => $("#end_date").datepicker("show"));
-  
-    $("#start_date").change(function() {
-        $("#end_date").datepicker("option", "minDate", $(this).val());
-    });
-  
-    $("#end_date").change(function() {
-        $("#start_date").datepicker("option", "maxDate", $(this).val());
-    });
-    const today = new Date();
-    const todayStr = ("0"+today.getDate()).slice(-2) + '/' + ("0"+(today.getMonth()+1)).slice(-2) + '/' + today.getFullYear();
-    ["#start_date", "#end_date"].forEach(sel => {
-        $(sel).on("dblclick", function() {
-            $(this).val(todayStr);
-            $(this).datepicker("setDate", todayStr);
-            // bestseller: ไม่ค้นหาอัตโนมัติ รอกดค้นหาเอง
-            if (document.getElementById('search_mode').value !== 'bestseller') {
-                setTimeout(() => updateData(), 100);
-            }
+
+    // ── icon click และ datepicker: เปิดเฉพาะ history mode ──
+    if (isHist) {
+        $("#start-icon").click(() => $("#start_date").datepicker("show"));
+        $("#end-icon").click(() => $("#end_date").datepicker("show"));
+        $("#start_date").change(function() {
+            $("#end_date").datepicker("option", "minDate", $(this).val());
         });
-    });
+        $("#end_date").change(function() {
+            $("#start_date").datepicker("option", "maxDate", $(this).val());
+        });
+        const today = new Date();
+        const todayStr = ("0"+today.getDate()).slice(-2) + '/' + ("0"+(today.getMonth()+1)).slice(-2) + '/' + today.getFullYear();
+        ["#start_date", "#end_date"].forEach(sel => {
+            $(sel).on("dblclick", function() {
+                $(this).val(todayStr);
+                $(this).datepicker("setDate", todayStr);
+                if (document.getElementById('search_mode').value !== 'bestseller') {
+                    setTimeout(() => updateData(), 100);
+                }
+            });
+        });
+    }
   
     $("select").on("keydown", e => {
         if (e.key === "Enter") {
             e.preventDefault();
-            // bestseller: ไม่ค้นหาอัตโนมัติ รอกดค้นหาเอง
             if (document.getElementById('search_mode').value !== 'bestseller') {
                 updateData();
             }
         }
     });
 
-    // ใช้ _applyModeUI แทน setPurchaseMode/setSearchMode เพื่ออัพเดต datepicker
-    // หลัง datepicker init โดยไม่ trigger data load ซ้ำ
+    // sync datepicker internal state กับค่าที่ PHP render ไว้ใน input
     (function() {
         const pMode  = document.getElementById('mode-input').value;
-        const sMode  = document.getElementById('search_mode').value;
-        const isHist = pMode === 'history';
-        const minD   = isHist ? new Date(2000,0,1) : 'today';
-        $('#start_date,#end_date').datepicker('option', 'minDate', minD);
-        $('#start_date,#end_date').datepicker('option', 'maxDate', 'today');
-        // sync datepicker internal state กับค่าที่ PHP render ไว้ใน input
-        const startVal = document.getElementById('start_date').value;
-        const endVal   = document.getElementById('end_date').value;
-        if (startVal) $('#start_date').datepicker('setDate', startVal);
-        if (endVal)   $('#end_date').datepicker('setDate', endVal);
+        const isHist2 = pMode === 'history';
+        if (isHist2) {
+            const minD = new Date(2000,0,1);
+            $('#start_date,#end_date').datepicker('option', 'minDate', minD);
+            $('#start_date,#end_date').datepicker('option', 'maxDate', 'today');
+            const startVal = document.getElementById('start_date').value;
+            const endVal   = document.getElementById('end_date').value;
+            if (startVal) $('#start_date').datepicker('setDate', startVal);
+            if (endVal)   $('#end_date').datepicker('setDate', endVal);
+        } else {
+            // today mode: ล็อควันที่เป็นวันนี้ ไม่ต้อง sync datepicker
+            const now = new Date();
+            const todayStr = ("0"+now.getDate()).slice(-2) + '/' + ("0"+(now.getMonth()+1)).slice(-2) + '/' + now.getFullYear();
+            document.getElementById('start_date').value = todayStr;
+            if (document.getElementById('end_date')) document.getElementById('end_date').value = todayStr;
+        }
     })();
 });
 

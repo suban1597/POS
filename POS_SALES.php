@@ -949,7 +949,7 @@ tbody tr:hover {
 <input type="hidden" name="mode" id="mode-input" value="<?= htmlspecialchars($mode) ?>">
     <!-- ปุ่มโหมด -->
     <div style="margin-bottom:12px;">
-        <label style="color:#ffcc00;font-size:15px;margin-right:12px;"><i class="fas fa-toggle-on"></i> โหมดข้อมูล:</label>
+        <label style="color:#ffcc00;font-size:15px;margin-right:12px;"><i class="fas fa-toggle-on"></i> โหมดเวลา:</label>
         <button type="button" id="mode-today-btn" onclick="setMode('today')"
             style="padding:9px 22px;border-radius:6px;border:2px solid #0ff;cursor:pointer;font-weight:bold;font-size:13px;
                    background:<?= $mode==='today'?'#0ff':'transparent' ?>;color:<?= $mode==='today'?'#000':'#0ff' ?>;">
@@ -963,28 +963,30 @@ tbody tr:hover {
     </div>
     <!-- เงื่อนไขทั้งหมดบรรทัดเดียว -->
     <div style="display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:8px;">
-        <div class="form-group" style="margin:0;">
+
+        <!-- ช่องวันที่เดียว (today mode เท่านั้น) -->
+        <div id="today-date-group" class="form-group" style="margin:0;display:<?= $mode==='today'?'block':'none' ?>;">
+            <label>วันที่:</label>
+            <input type="text" id="today_date" value="<?=htmlspecialchars($start_date)?>"
+                   placeholder="วว/ดด/ปปปป" autocomplete="off" readonly
+                   style="width:140px;cursor:not-allowed;opacity:0.7;background:rgba(0,10,20,0.6);">
+            <!-- hidden fields ส่งค่าวันที่ไปพร้อม form -->
+            <input type="hidden" name="start" id="start_date" value="<?=htmlspecialchars($start_date)?>">
+            <input type="hidden" name="end"   id="end_date"   value="<?=htmlspecialchars($end_date)?>">
+        </div>
+
+        <!-- ช่องวันที่ start/end (history mode เท่านั้น) -->
+        <div id="hist-start-group" class="form-group" style="margin:0;display:<?= $mode==='history'?'block':'none' ?>;">
             <label>เริ่มต้น:</label>
-            <input type="text" name="start" id="start_date" value="<?=htmlspecialchars($start_date)?>" placeholder="วว/ดด/ปปปป" autocomplete="off" required readonly style="cursor:pointer;">
+            <input type="text" name="start" id="hist_start_date" value="<?=htmlspecialchars($start_date)?>" placeholder="วว/ดด/ปปปป" autocomplete="off" required readonly style="cursor:pointer;">
             <i class="fas fa-calendar-alt date-icon" id="start-icon"></i>
         </div>
-        <div class="form-group" style="margin:0;">
+        <div id="hist-end-group" class="form-group" style="margin:0;display:<?= $mode==='history'?'block':'none' ?>;">
             <label>สิ้นสุด:</label>
-            <input type="text" name="end" id="end_date" value="<?=htmlspecialchars($end_date)?>" placeholder="วว/ดด/ปปปป" autocomplete="off" required readonly style="cursor:pointer;">
+            <input type="text" name="end" id="hist_end_date" value="<?=htmlspecialchars($end_date)?>" placeholder="วว/ดด/ปปปป" autocomplete="off" required readonly style="cursor:pointer;">
             <i class="fas fa-calendar-alt date-icon" id="end-icon"></i>
         </div>
         <!-- history-only filters (inline, ใช้ contents เพื่ออยู่บรรทัดเดียวกัน) -->
-        <div class="form-group" style="margin:0;">
-            <label>สาขา:</label>
-            <select name="branch" id="branch-select" style="min-width:160px;cursor:pointer;">
-                <option value="">— ทุกสาขา —</option>
-                <?php foreach ($office_list as $code => $name): ?>
-                <option value="<?=htmlspecialchars($code)?>" <?=$branch_filter===$code?'selected':''?>>
-                    <?=htmlspecialchars($name)?> (<?=htmlspecialchars($code)?>)
-                </option>
-                <?php endforeach; ?>
-            </select>
-        </div>
         <div id="hist-filters" style="display:<?= $mode==='history'?'contents':'none' ?>;">
             <div class="form-group" style="margin:0;">
                 <label>ช่วงเวลา:</label>
@@ -997,6 +999,17 @@ tbody tr:hover {
                 <i class="fas fa-times"></i> ล้างตัวกรอง
             </button>
             <?php endif; ?>
+        </div>
+        <div class="form-group" style="margin:0;">
+            <label>สาขา:</label>
+            <select name="branch" id="branch-select" style="min-width:160px;cursor:pointer;">
+                <option value="">— ทุกสาขา —</option>
+                <?php foreach ($office_list as $code => $name): ?>
+                <option value="<?=htmlspecialchars($code)?>" <?=$branch_filter===$code?'selected':''?>>
+                    <?=htmlspecialchars($name)?> (<?=htmlspecialchars($code)?>)
+                </option>
+                <?php endforeach; ?>
+            </select>
         </div>
         <button type="button" onclick="updateDashboard()"><i class="fas fa-search"></i> ค้นหา</button>
         <button type="button" id="refresh-btn" style="display:none;"><i class="fas fa-sync"></i> รีเฟรช</button>
@@ -1044,6 +1057,9 @@ tbody tr:hover {
         <div class="stat-value" style="color:#0ff;" id="card-today-total-amt">0.00</div>
         <div class="stat-unit">บาท &nbsp;|&nbsp; <span id="card-today-total-slip">0</span> สลิป</div>
     </div>
+</div>
+<div style="text-align:right;color:#aaa;font-size:12px;margin-bottom:6px;">
+    รีเฟรชล่าสุด: <span id="sales-refresh-time">-</span>
 </div>
 <canvas id="salesChart" height="100"></canvas>
 <div style="text-align:center; margin-top:20px; font-size:24px; font-weight:bold; color:#0ff;">
@@ -1107,6 +1123,13 @@ function setMode(mode) {
     hb.style.background = isHistory ? '#ff9800' : 'transparent';
     hb.style.color      = isHistory ? '#fff' : '#ff9800';
     document.getElementById('hist-filters').style.display = isHistory ? 'contents' : 'none';
+    // toggle date field groups
+    const todayDG  = document.getElementById('today-date-group');
+    const histSG   = document.getElementById('hist-start-group');
+    const histEG   = document.getElementById('hist-end-group');
+    if (todayDG) todayDG.style.display = isHistory ? 'none' : 'block';
+    if (histSG)  histSG.style.display  = isHistory ? 'block' : 'none';
+    if (histEG)  histEG.style.display  = isHistory ? 'block' : 'none';
     const branchSel = document.getElementById('branch-select');
     if (branchSel) {
         const prev = branchSel.value;
@@ -1137,13 +1160,27 @@ function setMode(mode) {
     const targetDate = isHistory ? yesterdayStr : todayStr;
     if (typeof $ !== 'undefined' && $.datepicker) {
         const minD = isHistory ? new Date(2000,0,1) : 'today';
-        $('#start_date,#end_date').datepicker('option','minDate', minD);
-        $('#start_date,#end_date').datepicker('option','maxDate','today');
-        $('#start_date').datepicker('setDate', targetDate);
-        $('#end_date').datepicker('setDate', targetDate);
+        $('#hist_start_date,#hist_end_date').datepicker('option','minDate', minD);
+        $('#hist_start_date,#hist_end_date').datepicker('option','maxDate','today');
+        $('#hist_start_date').datepicker('setDate', targetDate);
+        $('#hist_end_date').datepicker('setDate', targetDate);
+        if (!isHistory) {
+            document.getElementById('today_date').value = targetDate;
+            document.getElementById('start_date').value = targetDate;
+            document.getElementById('end_date').value   = targetDate;
+        } else {
+            document.getElementById('start_date').value = targetDate;
+            document.getElementById('end_date').value   = targetDate;
+        }
     } else {
-        document.getElementById('start_date').value = targetDate;
-        document.getElementById('end_date').value = targetDate;
+        if (!isHistory) {
+            document.getElementById('today_date').value = targetDate;
+            document.getElementById('start_date').value = targetDate;
+            document.getElementById('end_date').value   = targetDate;
+        } else {
+            document.getElementById('start_date').value = targetDate;
+            document.getElementById('end_date').value   = targetDate;
+        }
     }
     // เคลียร์หน้าจอทุกครั้งที่สลับโหมด
     document.querySelector('#branch-table tbody').innerHTML =
@@ -1181,8 +1218,16 @@ function updateDashboard(autoRefresh = false){
     const p = new URLSearchParams();
     p.set('ajax','1');
     p.set('mode',  curMode);
-    p.set('start', document.getElementById('start_date').value.trim());
-    p.set('end',   document.getElementById('end_date').value.trim());
+    // today mode: อ่านจาก hidden fields (ไม่ให้ user เปลี่ยน)
+    // history mode: อ่านจาก hist date inputs
+    if (isHistory) {
+        p.set('start', (document.getElementById('hist_start_date')||{value:''}).value.trim());
+        p.set('end',   (document.getElementById('hist_end_date')||{value:''}).value.trim());
+    } else {
+        const td = document.getElementById('start_date');
+        p.set('start', td ? td.value.trim() : '');
+        p.set('end',   td ? td.value.trim() : '');
+    }
     p.set('branch', (document.getElementById('branch-select')||{value:''}).value.trim());
     if (isHistory) {
         p.set('time_start', (document.getElementById('time-start')||{value:''}).value.trim());
@@ -1193,10 +1238,11 @@ function updateDashboard(autoRefresh = false){
     .then(d=>{
         if(d.error){
             document.querySelector('#branch-table tbody').innerHTML=`<tr><td colspan="9" class="error"><h2>Oracle Error</h2>${d.error}</td></tr>`;
-            document.getElementById('refresh-time').innerText='FAILED'; return;
+            document.getElementById('refresh-time').innerText='FAILED';
+            const _srt1=document.getElementById('sales-refresh-time'); if(_srt1) _srt1.innerText='FAILED'; return;
         }
         document.getElementById('refresh-time').innerText=d.refresh_time;
-        document.getElementById('date-range').innerText=d.start_date+' - '+d.end_date;
+        const _srt2=document.getElementById('sales-refresh-time'); if(_srt2) _srt2.innerText=d.refresh_time;
         document.getElementById('online-machines').innerText=d.online_machines;
         document.getElementById('offline-machines').innerText=d.no_data_count;
         // update summary text (today mode)
@@ -1299,6 +1345,7 @@ function updateDashboard(autoRefresh = false){
         console.error("Fetch Error:",e);
         document.querySelector('#branch-table tbody').innerHTML=`<tr><td colspan="9" class="error"><h2>AJAX Error</h2>ไม่สามารถเชื่อมต่อได้</td></tr>`;
         document.getElementById('refresh-time').innerText='ERROR';
+        const _srt3=document.getElementById('sales-refresh-time'); if(_srt3) _srt3.innerText='ERROR';
     });
 }
 <?php if (empty($errors)): ?>
@@ -1324,15 +1371,33 @@ $(function() {
         maxDate: "today",
         minDate: isHist ? new Date(2000,0,1) : 'today'
     };
-    $("#start_date, #end_date").datepicker(opts);
-    $("#start-icon").click(()=>$("#start_date").datepicker("show"));
-    $("#end-icon").click(()=>$("#end_date").datepicker("show"));
-    $("#start_date").change(function(){ $("#end_date").datepicker("option","minDate",$(this).val()); });
-    $("#end_date").change(function(){ $("#start_date").datepicker("option","maxDate",$(this).val()); });
+    $("#hist_start_date, #hist_end_date").datepicker(opts);
+    $("#start-icon").click(()=>$("#hist_start_date").datepicker("show"));
+    $("#end-icon").click(()=>$("#hist_end_date").datepicker("show"));
+    $("#hist_start_date").change(function(){
+        $("#hist_end_date").datepicker("option","minDate",$(this).val());
+        document.getElementById('start_date').value = $(this).val();
+    });
+    $("#hist_end_date").change(function(){
+        $("#hist_start_date").datepicker("option","maxDate",$(this).val());
+        document.getElementById('end_date').value = $(this).val();
+    });
     const today=new Date();
     const todayStr=("0"+today.getDate()).slice(-2)+'/'+ ("0"+(today.getMonth()+1)).slice(-2)+'/'+today.getFullYear();
-    ["#start_date","#end_date"].forEach(sel=>{
-        $(sel).on("dblclick",function(){$(this).val(todayStr);$(this).datepicker("setDate",todayStr);setTimeout(()=>updateDashboard(),100);});
+    // today_date แสดงวันนี้ตาย ไม่เปลี่ยนได้
+    const tdEl = document.getElementById('today_date');
+    if (tdEl) tdEl.value = todayStr;
+    const sdEl = document.getElementById('start_date');
+    const edEl = document.getElementById('end_date');
+    if (sdEl && !isHist) sdEl.value = todayStr;
+    if (edEl && !isHist) edEl.value = todayStr;
+    ["#hist_start_date","#hist_end_date"].forEach(sel=>{
+        $(sel).on("dblclick",function(){
+            $(this).val(todayStr);$(this).datepicker("setDate",todayStr);
+            document.getElementById('start_date').value = todayStr;
+            document.getElementById('end_date').value   = todayStr;
+            setTimeout(()=>updateDashboard(),100);
+        });
     });
     $("select").on("keydown",e=>{if(e.key==="Enter"){e.preventDefault();updateDashboard();}});
 });

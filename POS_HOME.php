@@ -43,7 +43,7 @@ $sql_file = sys_get_temp_dir() . "/POS_" . uniqid() . ".sql";
 // HANDLE DATE FILTER
 // ---------------------------
 $start_date = $_GET['start'] ?? date('d/m/Y');
-$end_date = $_GET['end'] ?? date('d/m/Y');
+$end_date   = $start_date; // วันเดียวเท่านั้น
 $branch_filter = trim($_GET['branch'] ?? '');
 $start_ts = DateTime::createFromFormat('d/m/Y', $start_date);
 $end_ts = DateTime::createFromFormat('d/m/Y', $end_date);
@@ -947,14 +947,10 @@ tr.machine-delay-60 { background: #550000 !important; color: #ff6666 !important;
 <div class="filter-section">
 <form method="GET" id="filter-form" style="text-align:center;">
     <div class="form-group">
-        <label>เริ่มต้น:</label>
-        <input type="text" name="start" id="start_date" value="<?=htmlspecialchars($start_date)?>" placeholder="วว/ดด/ปปปป" autocomplete="off" required readonly style="cursor:pointer;">
-        <i class="fas fa-calendar-alt date-icon" id="start-icon"></i>
-    </div>
-    <div class="form-group">
-        <label>สิ้นสุด:</label>
-        <input type="text" name="end" id="end_date" value="<?=htmlspecialchars($end_date)?>" placeholder="วว/ดด/ปปปป" autocomplete="off" required readonly style="cursor:pointer;">
-        <i class="fas fa-calendar-alt date-icon" id="end-icon"></i>
+        <label>วันที่:</label>
+        <input type="text" name="start" id="start_date" value="<?=htmlspecialchars($start_date)?>" placeholder="วว/ดด/ปปปป" autocomplete="off" required readonly
+               style="cursor:not-allowed;background:rgba(0,10,20,0.6);color:#aaa;border-color:#0a4a4a;">
+        <input type="hidden" name="end" id="end_date" value="<?=htmlspecialchars($end_date)?>">
     </div>
     <div class="form-group">
         <label>สาขา:</label>
@@ -1013,6 +1009,9 @@ tr.machine-delay-60 { background: #550000 !important; color: #ff6666 !important;
     </div>
 </div>
 
+<div style="text-align:right;color:#aaa;font-size:12px;margin-bottom:6px;">
+    รีเฟรชล่าสุด: <span id="home-refresh-time">-</span>
+</div>
 <canvas id="salesChart" height="100"></canvas>
 
 <table id="branch-table">
@@ -1074,8 +1073,7 @@ function updateDashboard() {
             const tbody = document.querySelector('#branch-table tbody');
             tbody.innerHTML = `<tr><td colspan="7" style="text-align:center; padding:80px 20px; background:rgba(139,0,0,0.2); border:2px dashed #ff6b6b; color:#ff6b6b; font-size:32px; font-weight:bold;"><i class="fas fa-ban" style="margin-right:20px; font-size:40px;"></i>${d.message}</td></tr>`;
             document.getElementById('refresh-time').innerText = d.refresh_time;
-            document.getElementById('date-range').innerText = d.start_date + ' - ' + d.end_date;
-            document.getElementById('online-machines').innerText = '0';
+            const _hrt1 = document.getElementById('home-refresh-time'); if(_hrt1) _hrt1.innerText = d.refresh_time;
             document.getElementById('offline-machines').innerText = '0';
             document.getElementById('total-amount').innerText = '0.00';
             document.getElementById('total-members').innerText = '0';
@@ -1093,7 +1091,7 @@ function updateDashboard() {
             return;
         }
         document.getElementById('refresh-time').innerText = d.refresh_time;
-        document.getElementById('date-range').innerText = d.start_date + ' - ' + d.end_date;
+        const _hrt2 = document.getElementById('home-refresh-time'); if(_hrt2) _hrt2.innerText = d.refresh_time;
         document.getElementById('online-machines').innerText = d.online_machines;
         document.getElementById('offline-machines').innerText = d.no_data_count;
         document.getElementById('total-amount').innerText = Number(d.total_amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -1196,6 +1194,7 @@ function updateDashboard() {
         console.error("Fetch Error:", e);
         document.querySelector('#branch-table tbody').innerHTML = `<tr><td colspan="7" class="error"><h2>AJAX Error</h2>ไม่สามารถเชื่อมต่อได้</td></tr>`;
         document.getElementById('refresh-time').innerText = 'ERROR';
+        const _hrt3 = document.getElementById('home-refresh-time'); if(_hrt3) _hrt3.innerText = 'ERROR';
     });
 }
 <?php if (empty($errors)): ?>
@@ -1206,20 +1205,8 @@ setInterval(fetchPingStatus, 2000);
 <?php endif; ?>
 document.getElementById('refresh-btn').addEventListener('click', updateDashboard);
 
-// jQuery datepicker — วันนี้เท่านั้น (minDate = maxDate = today)
+// jQuery ready
 $(function() {
-    const opts = {
-        dateFormat: 'dd/mm/yy',
-        changeMonth: true,
-        changeYear: true,
-        maxDate: 'today',
-        minDate: 'today'
-    };
-    $("#start_date, #end_date").datepicker(opts);
-    $("#start-icon").click(() => $("#start_date").datepicker("show"));
-    $("#end-icon").click(() => $("#end_date").datepicker("show"));
-    $("#start_date").change(function() { $("#end_date").datepicker("option", "minDate", $(this).val()); });
-    $("#end_date").change(function() { $("#start_date").datepicker("option", "maxDate", $(this).val()); });
     $("select").on("keydown", e => { if (e.key === "Enter") { e.preventDefault(); updateDashboard(); } });
 
     // คืนค่าสาขาที่เลือกจาก URL (ป้องกัน selected ไม่ติดเมื่อ code ไม่ตรง)
@@ -1227,7 +1214,6 @@ $(function() {
     const branchSel = document.getElementById('branch-select');
     if (branchSel && urlBranch) {
         branchSel.value = urlBranch;
-        // ถ้า option นั้นไม่มีใน dropdown (code ไม่ตรง) ให้ reset เป็นทั้งหมด
         if (branchSel.value !== urlBranch) branchSel.value = '';
     }
 });
